@@ -827,95 +827,72 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
    * Supprimer : les brouillons demandent confirmation (bouton de la barre,
    * poubelle au survol), les autres messages partent directement à la corbeille.
    */
+  /**
+   * Message à sélectionner quand `ids` quittent la liste : le suivant, sinon le
+   * précédent, comme Thunderbird (lot R2) ; `null` si la sélection n'est pas
+   * touchée (suppression au survol d'un autre message).
+   */
+  const nextAfter = (ids: number[]): number | null => {
+    const gone = new Set(ids);
+    if (!selectedIds.some((id) => gone.has(id))) return null;
+    const first = visible.findIndex((m) => gone.has(m.id));
+    if (first < 0) return null;
+    const after = visible.slice(first).find((m) => !gone.has(m.id));
+    const before = visible.slice(0, first).reverse().find((m) => !gone.has(m.id));
+    return (after ?? before)?.id ?? null;
+  };
+
+  /** Le message suivant prend la sélection : les flèches continuent depuis lui. */
+  const selectNext = (next: number | null) => {
+    if (next === null) return;
+    setSelectedIds([next]);
+    anchorId.current = next;
+  };
+
+  /**
+   * Suppression définitive (« Éléments supprimés », indésirables), en tâche
+   * de fond comme les déplacements (lot J11a), sans confirmation, comme
+   * Thunderbird (lot R2) : seul « Vider le dossier » demande confirmation.
+   */
+  const deleteForeverIds = async (ids: number[]) => {
+    hide(ids);
+    setCurrent((c) => (c && ids.includes(c.id) ? null : c));
+    try {
+      const removed = await api.deleteForever(ids);
+      notify(removed > 1 ? t("{n} éléments supprimés", { n: removed }) : t("{n} élément supprimé", { n: removed }));
+      const gone = new Set(ids);
+      setMessages((list) => list.filter((m) => !gone.has(m.id)));
+      setSearchResults((list) => (list ? list.filter((m) => !gone.has(m.id)) : list));
+    } catch (e) {
+      fail(e);
+    } finally {
+      hide(ids, false);
+    }
+    if (folderId) await reloadMessages(folderId);
+    void reloadFolders();
+  };
+
+  /**
+   * Supprimer (touche Suppr, barre, clic droit) : vers « Éléments supprimés »,
+   * ou définitivement depuis la corbeille et les indésirables (relecture
+   * complète n° 40). Sans confirmation, brouillons compris, comme Thunderbird
+   * (lot R2) : au clavier, une confirmation par message alourdissait le tri.
+   */
   const deleteIds = (ids: number[]) => {
     // Une table construite une fois : un `find` par message coûtait n² (audit P3).
     const byId = new Map((searchResults ?? messages).map((m) => [m.id, m]));
-    const isDraft = (id: number) => {
-      const m = byId.get(id);
-      return !!m && folderById.get(m.folderId)?.role === "drafts";
-    };
-    // Dans « Éléments supprimés » ou les indésirables : suppression
-    // définitive après confirmation, comme Thunderbird ; le déplacement vers
-    // la corbeille ne faisait rien, sans le dire (relecture complète n° 40).
     const inBin = (id: number) => {
       const m = byId.get(id);
       const role = m ? folderById.get(m.folderId)?.role : undefined;
       return role === "trash" || role === "junk";
     };
+    const next = nextAfter(ids);
     const final = ids.filter(inBin);
-    if (final.length > 0) {
-      const others = ids.filter((id) => !inBin(id));
-      const n = final.length;
-      setDialog(
-        <ConfirmDialog
-          title={n > 1 ? t("Supprimer définitivement {n} éléments ?", { n }) : t("Supprimer définitivement ?")}
-          message={
-            n > 1
-              ? t("Ces {n} éléments seront supprimés définitivement du serveur. Cette action est irréversible.", { n })
-              : t("Cet élément sera supprimé définitivement du serveur. Cette action est irréversible.")
-          }
-          confirm={t("Supprimer")}
-          onConfirm={async () => {
-            // En tâche de fond, comme les déplacements (lot J11a).
-            hide(final);
-            setSelectedIds([]);
-            setCurrent((c) => (c && ids.includes(c.id) ? null : c));
-            const trashing = others.length > 0 ? moveIdsToRole(others, "trash", t("Éléments supprimés")) : Promise.resolve();
-            try {
-              const removed = await api.deleteForever(final);
-              notify(removed > 1 ? t("{n} éléments supprimés", { n: removed }) : t("{n} élément supprimé", { n: removed }));
-              const gone = new Set(final);
-              setMessages((list) => list.filter((m) => !gone.has(m.id)));
-              setSearchResults((list) => (list ? list.filter((m) => !gone.has(m.id)) : list));
-            } catch (e) {
-              fail(e);
-            } finally {
-              hide(final, false);
-            }
-            await trashing;
-            if (folderId) await reloadMessages(folderId);
-            void reloadFolders();
-          }}
-          onClose={() => setDialog(null)}
-        />,
-      );
-      return;
-    }
-    const drafts = ids.filter(isDraft).length;
-    if (drafts === 0) {
-      void moveIdsToRole(ids, "trash", t("Éléments supprimés"));
-      return;
-    }
-    const n = ids.length;
-    setDialog(
-      <ConfirmDialog
-        title={
-          drafts === 1 && n === 1
-            ? t("Supprimer le brouillon ?")
-            : n > 1
-              ? t("Supprimer {n} éléments ?", { n })
-              : t("Supprimer {n} élément ?", { n })
-        }
-        message={
-          drafts === n
-            ? n > 1
-              ? t("Ces {n} brouillons seront déplacés dans « Éléments supprimés ».", { n })
-              : t("Ce brouillon sera déplacé dans « Éléments supprimés ».")
-            : drafts > 1
-              ? n - drafts > 1
-                ? t("{drafts} brouillons et {others} autres messages seront déplacés dans « Éléments supprimés ».", { drafts, others: n - drafts })
-                : t("{drafts} brouillons et {others} autre message seront déplacés dans « Éléments supprimés ».", { drafts, others: n - drafts })
-              : n - drafts > 1
-                ? t("{drafts} brouillon et {others} autres messages seront déplacés dans « Éléments supprimés ».", { drafts, others: n - drafts })
-                : t("{drafts} brouillon et {others} autre message seront déplacés dans « Éléments supprimés ».", { drafts, others: n - drafts })
-        }
-        confirm={t("Supprimer")}
-        onConfirm={async () => {
-          await moveIdsToRole(ids, "trash", t("Éléments supprimés"));
-        }}
-        onClose={() => setDialog(null)}
-      />,
-    );
+    const others = ids.filter((id) => !inBin(id));
+    if (others.length > 0) void moveIdsToRole(others, "trash", t("Éléments supprimés"));
+    if (final.length > 0) void deleteForeverIds(final);
+    // Après le vidage de la sélection par le déplacement (mêmes rendus).
+    selectNext(next);
   };
 
   const quickDelete = (m: MessageSummary) => deleteIds([m.id]);
@@ -926,8 +903,15 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
   };
 
   /** Restaurer : chaque message retourne dans son dossier d'origine, sinon dans la boîte de réception. */
-  const restoreIds = (ids: number[]) =>
-    api
+  const restoreIds = (ids: number[]) => {
+    // Comme un déplacement (lot R2) : les messages quittent tout de suite la
+    // corbeille, le suivant est sélectionné, le serveur travaille ensuite.
+    const next = nextAfter(ids);
+    hide(ids);
+    setSelectedIds([]);
+    setCurrent((c) => (c && ids.includes(c.id) ? null : c));
+    selectNext(next);
+    return api
       .restoreMessages(ids)
       .then(async ({ report, toInbox }) => {
         const n = report.moved.length + (report.queued ?? 0);
@@ -942,14 +926,15 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
           notify(t("{n} échec(s)", { n: report.failed.length }), report.failed.map((f) => f.reason).join("\n"), "error");
         }
         const failedIds = new Set(report.failed.map((f) => f.id));
-        const gone = new Set(ids);
-        setSearchResults((list) => (list ? list.filter((m) => !gone.has(m.id) || failedIds.has(m.id)) : list));
-        setSelectedIds([]);
-        setCurrent(null);
+        const gone = new Set(ids.filter((id) => !failedIds.has(id)));
+        setMessages((list) => (list.some((m) => gone.has(m.id)) ? list.filter((m) => !gone.has(m.id)) : list));
+        setSearchResults((list) => (list ? list.filter((m) => !gone.has(m.id)) : list));
         await reloadFolders();
         if (folderId) await reloadMessages(folderId);
       })
-      .catch(fail);
+      .catch(fail)
+      .finally(() => hide(ids, false));
+  };
 
   /** Clic droit › Restaurer : comme Supprimer, toute la sélection qui contient le message. */
   const menuRestore = (m: MessageSummary) => restoreIds(selectedSet.has(m.id) ? selectedIds : [m.id]);
@@ -1323,6 +1308,31 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
       />,
     );
 
+  /**
+   * Vide des dossiers en tâche de fond, les comptes en parallèle (lot R2) :
+   * leurs messages quittent la liste et leurs compteurs passent à zéro tout
+   * de suite ; un compte en échec est signalé, les autres sont vidés.
+   */
+  const emptyInBackground = async (list: Folder[], label: string) => {
+    const emptied = new Set(list.map((f) => f.id));
+    const gone = new Set((searchResults ?? messages).filter((m) => emptied.has(m.folderId)).map((m) => m.id));
+    setMessages((l) => l.filter((m) => !emptied.has(m.folderId)));
+    setSearchResults((l) => (l ? l.filter((m) => !emptied.has(m.folderId)) : l));
+    setSelectedIds((sel) => sel.filter((id) => !gone.has(id)));
+    setCurrent((c) => (c && emptied.has(c.folderId) ? null : c));
+    setFolders((fs) => fs.map((f) => (emptied.has(f.id) ? { ...f, total: 0, unread: 0 } : f)));
+    const results = await Promise.allSettled(list.map((f) => api.emptyFolder(f.id)));
+    const removed = results.reduce((n, r) => n + (r.status === "fulfilled" ? r.value : 0), 0);
+    const errors = results.flatMap((r) => (r.status === "rejected" ? [String(r.reason)] : []));
+    if (errors.length > 0) notify(t("{n} échec(s)", { n: errors.length }), errors.join("\n"), "error");
+    if (errors.length < list.length) notify(
+      t("« {label} » vidé", { label }),
+      removed > 1 ? t("{n} éléments supprimés", { n: removed }) : t("{n} élément supprimé", { n: removed }),
+    );
+    await reloadFolders();
+    if (folderRef.current) void reloadMessages(folderRef.current);
+  };
+
   const emptyFolders = (list: Folder[], label: string) => {
     const total = list.reduce((n, f) => n + f.total, 0);
     setDialog(
@@ -1339,14 +1349,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
         }
         confirm={t("Vider")}
         onConfirm={async () => {
-          let removed = 0;
-          for (const f of list) removed += await api.emptyFolder(f.id);
-          notify(
-            t("« {label} » vidé", { label }),
-            removed > 1 ? t("{n} éléments supprimés", { n: removed }) : t("{n} élément supprimé", { n: removed }),
-          );
-          await reloadFolders();
-          if (folderRef.current) void reloadMessages(folderRef.current);
+          // La fenêtre se ferme tout de suite : vidage en tâche de fond (lot R2).
+          void emptyInBackground(list, label);
         }}
         onClose={() => setDialog(null)}
       />,

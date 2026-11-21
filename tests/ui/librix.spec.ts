@@ -347,6 +347,20 @@ test("sélection supprimée par la touche Suppr", async ({ page }) => {
   await bothGone(page);
 });
 
+test("R2 : après Suppr, le message suivant est sélectionné et les flèches continuent", async ({ page }) => {
+  const list = page.getByRole("listbox", { name: "Messages" });
+  await expect(list.locator(".msg").nth(3)).toBeVisible();
+  const subjects = await list.locator(".msg .msg-subject").allInnerTexts();
+  await list.locator(".msg").first().click();
+  await page.keyboard.press("Delete");
+  await expect(list.getByText(subjects[0], { exact: true })).toHaveCount(0);
+  await expect(list.locator(".msg.selected .msg-subject")).toHaveText(subjects[1]);
+  await page.keyboard.press("ArrowDown");
+  await expect(list.locator(".msg.selected .msg-subject")).toHaveText(subjects[2]);
+  // Sans confirmation : aucune fenêtre ouverte.
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
 test("sélection supprimée par le bouton de la barre", async ({ page }) => {
   await selectTwo(page);
   await page.getByRole("toolbar", { name: "Actions sur la sélection" }).getByRole("button", { name: "Supprimer" }).click();

@@ -132,6 +132,9 @@ pub(crate) struct ImapAccount {
     sync: Mutex<Option<Session>>,
     user: Mutex<Option<Session>>,
     state: Mutex<AccountState>,
+    /// Dossiers dont la présence des messages en cache a été vérifiée depuis
+    /// le lancement (lot R) : voir [`checks_presence`].
+    verified: Mutex<HashSet<String>>,
 }
 
 /// Verrou tolérant : une panique dans une opération ne bloque pas les suivantes.
@@ -147,7 +150,13 @@ fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl ImapAccount {
     fn new(config: AccountConfig) -> Self {
-        Self { config, sync: Mutex::new(None), user: Mutex::new(None), state: Mutex::new(AccountState::default()) }
+        Self {
+            config,
+            sync: Mutex::new(None),
+            user: Mutex::new(None),
+            state: Mutex::new(AccountState::default()),
+            verified: Mutex::new(HashSet::new()),
+        }
     }
 
     /// Exécute une opération sur une connexion, en se (re)connectant au besoin.
@@ -332,6 +341,57 @@ fn move_once(s: &mut Session, attempts: &mut u32, mailbox: &str, known: Option<u
     Ok(())
 }
 
+/// Messages encore sur le serveur parmi `uids` (`UID SEARCH UID …`, par paquets),
+/// dans le dossier sélectionné.
+fn present_uids(s: &mut Session, uids: &[u32]) -> imap_lite::Result<HashSet<u32>> {
+    const UIDS_PER_SEARCH: usize = 500;
+    let mut present = HashSet::new();
+    for chunk in uids.chunks(UIDS_PER_SEARCH) {
+        let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        present.extend(s.uid_search_raw(&format!("UID {set}"))?);
+    }
+    Ok(present)
+}
+
+/// Action sur des messages du dossier `mailbox` dont certains ont pu
+/// disparaître du serveur (supprimés ailleurs, ou restés à tort dans le cache) :
+/// certains serveurs refusent alors toute la commande (« Message set not
+/// found », lot R). Après un refus, l'action est refaite sur les seuls messages
+/// encore présents. Renvoie les UID disparus, à retirer du cache. Un refus qui
+/// ne s'explique pas par un message disparu reste une erreur.
+fn on_present(
+    s: &mut Session,
+    mailbox: &str,
+    known: Option<u32>,
+    uids: &[u32],
+    mut op: impl FnMut(&mut Session, &[u32]) -> imap_lite::Result<()>,
+) -> imap_lite::Result<Vec<u32>> {
+    let refusal = match op(s, uids) {
+        Ok(()) => return Ok(Vec::new()),
+        Err(imap_lite::Error::No(reason)) => reason,
+        Err(e) => return Err(e),
+    };
+    ensure_selected(s, mailbox, known)?;
+    let present = present_uids(s, uids)?;
+    let (rest, gone): (Vec<u32>, Vec<u32>) = uids.iter().copied().partition(|u| present.contains(u));
+    if gone.is_empty() {
+        return Err(imap_lite::Error::No(refusal));
+    }
+    if !rest.is_empty() {
+        op(s, &rest)?;
+    }
+    Ok(gone)
+}
+
+/// Faut-il relire la liste des UID présents sur le serveur ? Avec QRESYNC, ou
+/// quand rien ne semble avoir bougé, seules les suppressions récentes sont
+/// connues : un message resté à tort dans le cache n'en partirait jamais. La
+/// première synchronisation de chaque dossier depuis le lancement relit donc
+/// la liste (`UID SEARCH UID min:*`, lot R).
+fn checks_presence(plan: FlagPlan, first_since_launch: bool) -> bool {
+    first_since_launch && matches!(plan, FlagPlan::Unchanged | FlagPlan::Qresync { .. })
+}
+
 /// Messages disparus du serveur : parmi ceux lus dans le cache **au début**
 /// de la synchronisation (`cached`), ceux que le serveur n'a plus. Un message
 /// ajouté au cache entre-temps par une autre action (brouillon enregistré,
@@ -471,6 +531,32 @@ enum Removed {
     Present(Vec<u32>),
 }
 
+/// États des messages en cache à partir de l'UID `min`, relus selon `plan`.
+fn refresh_known(s: &mut Session, min: u32, plan: FlagPlan, first_since_launch: bool) -> imap_lite::Result<Refresh> {
+    let range = format!("{min}:*");
+    Ok(match plan {
+        FlagPlan::Full => Refresh::Full(s.uid_fetch_set(&range, "(UID FLAGS)")?),
+        _ if checks_presence(plan, first_since_launch) => {
+            let changed = match plan {
+                FlagPlan::Qresync { since } => s.uid_fetch_changed(&range, "(UID FLAGS)", since)?.items,
+                _ => Vec::new(),
+            };
+            let present = s.uid_search_raw(&format!("UID {range}"))?;
+            Refresh::Delta { changed, removed: Removed::Present(present) }
+        }
+        FlagPlan::Unchanged => Refresh::Delta { changed: Vec::new(), removed: Removed::Vanished(UidSet::default()) },
+        FlagPlan::Qresync { since } => {
+            let changes = s.uid_fetch_changed(&range, "(UID FLAGS)", since)?;
+            Refresh::Delta { changed: changes.items, removed: Removed::Vanished(changes.vanished) }
+        }
+        FlagPlan::Condstore { since, fetch_flags } => {
+            let changed = if fetch_flags { s.uid_fetch_changed(&range, "(UID FLAGS)", since)?.items } else { Vec::new() };
+            let present = s.uid_search_raw(&format!("UID {range}"))?;
+            Refresh::Delta { changed, removed: Removed::Present(present) }
+        }
+    })
+}
+
 /// Synchronise un dossier : nouveaux messages, états lu/suivi, suppressions.
 fn sync_mailbox(account: &ImapAccount, cache: &Mutex<Cache>, mailbox: &str) -> Result<(), MailError> {
     let account_id = account.config.id.clone();
@@ -487,6 +573,7 @@ fn sync_mailbox(account: &ImapAccount, cache: &Mutex<Cache>, mailbox: &str) -> R
         )
     };
 
+    let first_since_launch = !guard(&account.verified).contains(&mailbox);
     let (info, validity_changed, new_items, refresh, condstore) = account
         .run(Lane::Sync, |s| {
             // QRESYNC doit être activé avant toute sélection ; sinon CONDSTORE suffit.
@@ -520,20 +607,8 @@ fn sync_mailbox(account: &ImapAccount, cache: &Mutex<Cache>, mailbox: &str) -> R
                 None => Refresh::Nothing,
                 Some(_) if info.exists == 0 => Refresh::Full(Vec::new()),
                 Some(&min) => {
-                    let range = format!("{min}:*");
-                    match flag_plan(cached_validity, stored_modseq, &info, s.condstore(), s.qresync()) {
-                        FlagPlan::Full => Refresh::Full(s.uid_fetch_set(&range, "(UID FLAGS)")?),
-                        FlagPlan::Unchanged => Refresh::Delta { changed: Vec::new(), removed: Removed::Vanished(UidSet::default()) },
-                        FlagPlan::Qresync { since } => {
-                            let changes = s.uid_fetch_changed(&range, "(UID FLAGS)", since)?;
-                            Refresh::Delta { changed: changes.items, removed: Removed::Vanished(changes.vanished) }
-                        }
-                        FlagPlan::Condstore { since, fetch_flags } => {
-                            let changed = if fetch_flags { s.uid_fetch_changed(&range, "(UID FLAGS)", since)?.items } else { Vec::new() };
-                            let present = s.uid_search_raw(&format!("UID {range}"))?;
-                            Refresh::Delta { changed, removed: Removed::Present(present) }
-                        }
-                    }
+                    let plan = flag_plan(cached_validity, stored_modseq, &info, s.condstore(), s.qresync());
+                    refresh_known(s, min, plan, first_since_launch)?
                 }
             };
             Ok((info, validity_changed, new_items, refresh, s.condstore()))
@@ -582,7 +657,9 @@ fn sync_mailbox(account: &ImapAccount, cache: &Mutex<Cache>, mailbox: &str) -> R
             let modseq = info.highest_modseq.filter(|_| condstore && !info.no_modseq);
             c.set_modseq_state(&account_id, &mailbox, modseq, info.exists)
         })
-        .map_err(backend)
+        .map_err(backend)?;
+    guard(&account.verified).insert(mailbox);
+    Ok(())
 }
 
 /// Archive Gmail : « Tous les messages » sans ce qui est encore dans la
@@ -2132,6 +2209,8 @@ impl Router {
             }
         }
         let mut out = RestoreReport::default();
+        // Dossiers qui ont reçu des messages : relus aussitôt (lot R2).
+        let mut refilled: Vec<String> = Vec::new();
         for TrashGroup { account, mailbox, members } in sources {
             let uids: Vec<u32> = members.iter().map(|m| m.1).collect();
             let known = self.known_validity(&account, &mailbox);
@@ -2182,6 +2261,9 @@ impl Router {
             }
             for RestoreTarget { folder, ids: restored, notes } in targets {
                 let report = self.move_or_queue(journal, &restored, Some(folder.as_str()), None)?;
+                if !report.moved.is_empty() && !refilled.contains(&folder) {
+                    refilled.push(folder);
+                }
                 // Note gardée en cas d'échec : un nouvel essai retrouvera le dossier.
                 let forgotten = if report.failed.is_empty() { self.cache().trash_origins_forget(&account, &notes) } else { Ok(()) };
                 if let Err(e) = forgotten {
@@ -2193,6 +2275,16 @@ impl Router {
                 all.queued = all.queued.saturating_add(report.queued);
                 all.moved.extend(report.moved);
                 all.failed.extend(report.failed);
+            }
+        }
+        // Sinon, les messages restaurés n'apparaissaient dans leur dossier qu'à
+        // la synchronisation suivante. Un échec ici ne change rien au résultat.
+        // Sur ce fil, l'un après l'autre (le plus souvent la seule boîte de
+        // réception) : pas de fil par compte, dont la connexion échapperait au
+        // serveur joué des tests.
+        for folder in &refilled {
+            if let Err(e) = self.sync_folder(folder) {
+                crate::diag::report(&e);
             }
         }
         Ok(out)
@@ -2220,10 +2312,13 @@ impl Router {
             self.imap_account(&account)?
                 .run(Lane::User, |s| {
                     ensure_selected(s, &mailbox, known)?;
-                    s.uid_store(&uids, "+FLAGS.SILENT (\\Deleted)")?;
-                    s.uid_expunge(&uids)
+                    on_present(s, &mailbox, known, &uids, |s, uids| {
+                        s.uid_store(uids, "+FLAGS.SILENT (\\Deleted)")?;
+                        s.uid_expunge(uids)
+                    })
                 })
                 .map_err(backend)?;
+            // Disparus du serveur ou supprimés : tous quittent le cache.
             self.cache().delete_messages(&account, &mailbox, &uids).map_err(backend)?;
             removed = removed.saturating_add(u32::try_from(uids.len()).unwrap_or(u32::MAX));
         }
@@ -2811,10 +2906,17 @@ impl Router {
             let known = self.known_validity(&account, &mailbox);
             let result = self.imap_account(&account)?.run(Lane::User, |s| {
                 ensure_selected(s, &mailbox, known)?;
-                s.uid_store(&uids, &op)
+                on_present(s, &mailbox, known, &uids, |s, uids| s.uid_store(uids, &op))
             });
+            let mut uids = uids;
             match result {
-                Ok(()) => {}
+                Ok(gone) if gone.is_empty() => {}
+                // Disparus du serveur : retirés du cache, sans état à changer.
+                Ok(gone) => {
+                    self.cache().delete_messages(&account, &mailbox, &gone).map_err(backend)?;
+                    let gone: HashSet<u32> = gone.into_iter().collect();
+                    uids.retain(|u| !gone.contains(u));
+                }
                 // Hors connexion : appliqué ici tout de suite, sur le serveur au retour du réseau.
                 Err(e) if is_network_error(&e) => {
                     let action = PendingAction {
@@ -2885,10 +2987,11 @@ impl Router {
                         // « Restaurer » renverra alors dans la boîte de réception.
                         origins = fetch_message_ids(s, &uids).unwrap_or_default();
                     }
-                    move_once(s, &mut attempts, &mailbox, known, &uids, &target_mailbox)
+                    on_present(s, &mailbox, known, &uids, |s, uids| move_once(s, &mut attempts, &mailbox, known, uids, &target_mailbox))
                 })
                 .map_err(backend)?;
-            // Les messages ont quitté ce dossier ; la cible les recevra à sa synchronisation.
+            // Les messages ont quitté ce dossier (déplacés, ou déjà disparus du
+            // serveur) ; la cible les recevra à sa synchronisation.
             // Une seule transaction pour tout le dossier (audit P4).
             let mut c = self.cache();
             c.delete_messages(&account, &mailbox, &uids).map_err(backend)?;
@@ -3278,22 +3381,27 @@ mod tests {
         /// Serveur qui refuse par `NO` les commandes commençant par `refused`.
         fn refusing(refused: &[&str]) -> (Session, Arc<Mutex<Vec<String>>>) {
             let received = Arc::new(Mutex::new(Vec::new()));
+            (Self::refusing_with(refused, None, &received), received)
+        }
+
+        /// Comme [`Scripted::refusing`], avec l'UID trouvé par `UID SEARCH` (lot R).
+        fn refusing_with(refused: &[&str], found: Option<u32>, received: &Arc<Mutex<Vec<String>>>) -> Session {
             let server = Scripted {
                 to_client: b"* OK [CAPABILITY IMAP4rev1 MOVE UIDPLUS] pret\r\n".iter().copied().collect(),
                 line: Vec::new(),
                 literal: 0,
                 pending: String::new(),
-                found: None,
+                found,
                 refuse_move: false,
                 fetch: String::new(),
                 refused: refused.iter().map(|start| (*start).to_string()).collect(),
                 slow_select: None,
                 tick: None,
                 stalled_until: None,
-                received: Arc::clone(&received),
+                received: Arc::clone(received),
             };
             let stream: Box<dyn crate::transport::Stream> = Box::new(server);
-            (imap_lite::Client::connect(stream).expect("accueil du serveur joué"), received)
+            imap_lite::Client::connect(stream).expect("accueil du serveur joué")
         }
 
         fn command(&mut self, text: &str) {
@@ -3449,6 +3557,88 @@ mod tests {
         move_once(&mut s, &mut attempts, "INBOX", None, &[5], "Archive").expect("déplacement repris");
         assert_eq!(count(&received, "UID SEARCH"), 1);
         assert_eq!(count(&received, "UID COPY"), 1);
+    }
+
+    /// Commandes entières reçues par le serveur joué qui commencent par `start`.
+    fn commands(received: &Arc<Mutex<Vec<String>>>, start: &str) -> Vec<String> {
+        received.lock().expect("journal du serveur joué").iter().filter(|c| c.starts_with(start)).cloned().collect()
+    }
+
+    #[test]
+    fn r_message_disparu_ecarte_puis_action_refaite() {
+        // « Message set not found » : 5 n'est plus sur le serveur, 9 si.
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let mut s = Scripted::refusing_with(&["UID MOVE 5,9 "], Some(9), &received);
+        let mut attempts = 0;
+        let gone = on_present(&mut s, "INBOX", None, &[5, 9], |s, uids| move_once(s, &mut attempts, "INBOX", None, uids, "Trash"))
+            .expect("déplacement des seuls messages présents");
+        assert_eq!(gone, vec![5], "5 disparu, à retirer du cache");
+        let moves = commands(&received, "> UID MOVE");
+        assert_eq!(moves.len(), 2, "{moves:?}");
+        assert!(moves.get(1).is_some_and(|m| m.starts_with("> UID MOVE 9 ")), "refait pour 9 seul : {moves:?}");
+    }
+
+    #[test]
+    fn r_tous_disparus_sans_nouvel_essai() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let mut s = Scripted::refusing_with(&["UID STORE"], None, &received);
+        let gone = on_present(&mut s, "INBOX", None, &[5, 9], |s, uids| s.uid_store(uids, "+FLAGS.SILENT (\\Seen)"))
+            .expect("rien à faire : les deux messages sont partis");
+        assert_eq!(gone, vec![5, 9]);
+        assert_eq!(commands(&received, "> UID STORE").len(), 1, "pas de nouvel essai");
+    }
+
+    #[test]
+    fn r_refus_sans_message_disparu_reste_une_erreur() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let mut s = Scripted::refusing_with(&["UID STORE"], Some(5), &received);
+        let refused = on_present(&mut s, "INBOX", None, &[5], |s, uids| s.uid_store(uids, "+FLAGS.SILENT (\\Seen)"));
+        assert!(matches!(refused, Err(imap_lite::Error::No(_))), "{refused:?}");
+        assert_eq!(commands(&received, "> UID STORE").len(), 1);
+    }
+
+    #[test]
+    fn r_supprimer_un_message_disparu_du_serveur() {
+        let cache = Arc::new(Mutex::new(Cache::in_memory().unwrap()));
+        let router = Router::new(vec![config("mailo")], Arc::clone(&cache));
+        let account = Arc::clone(&router.all_accounts()[0]);
+        guard(&account.state).folders = build_folders("mailo", vec![entry("INBOX", &[]), entry("Trash", &["\\Trash"])]);
+        let header = |uid: u32| Header {
+            uid,
+            from_name: String::new(),
+            from_email: "a@example.com".into(),
+            subject: format!("n° {uid}"),
+            preview: String::new(),
+            date: i64::from(uid),
+            flags: Flags::default(),
+            has_attachments: false,
+        };
+        lock_cache(&cache).upsert_headers("mailo", "INBOX", &[header(5), header(9)]).unwrap();
+        let ids: Vec<MessageId> = [5, 9]
+            .into_iter()
+            .map(|uid| lock_cache(&cache).id_for(ImapRef { account: "mailo".into(), mailbox: "INBOX".into(), uid }))
+            .collect();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&received);
+        TEST_SERVER.with(|s| *s.borrow_mut() = Some(Box::new(move || Scripted::refusing_with(&["UID MOVE 5,9 "], Some(9), &log))));
+        let outcome = router.native_move(&ids, "mailo:Trash");
+        TEST_SERVER.with(|s| *s.borrow_mut() = None);
+        assert_eq!(outcome.expect("aucun échec affiché"), ids);
+        assert_eq!(lock_cache(&cache).cached_uids("mailo", "INBOX").unwrap(), Vec::<u32>::new(), "les deux quittent la liste");
+        let moves = commands(&received, "> UID MOVE");
+        assert!(moves.last().is_some_and(|m| m.starts_with("> UID MOVE 9 ")), "{moves:?}");
+    }
+
+    #[test]
+    fn r_presence_relue_une_fois_depuis_le_lancement() {
+        let qresync = FlagPlan::Qresync { since: 500 };
+        assert!(checks_presence(FlagPlan::Unchanged, true), "rien n'a bougé, mais première fois");
+        assert!(checks_presence(qresync, true), "QRESYNC ne signale que les suppressions récentes");
+        assert!(!checks_presence(FlagPlan::Unchanged, false));
+        assert!(!checks_presence(qresync, false));
+        // Déjà relue entièrement par ces deux-là.
+        assert!(!checks_presence(FlagPlan::Full, true));
+        assert!(!checks_presence(FlagPlan::Condstore { since: 500, fetch_flags: false }, true));
     }
 
     /// Lit le message 5 de « mailo:INBOX » sur un serveur qui répond `fetch`.
@@ -3709,7 +3899,9 @@ mod tests {
         );
         let received = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&received);
-        TEST_SERVER.with(|s| *s.borrow_mut() = Some(Box::new(move || Scripted::open(None, true, fetch.clone(), &log))));
+        // Le message 5 est toujours dans la boîte (`UID SEARCH UID 5`, lot R) :
+        // le refus vient du dossier cible, pas d'un message disparu.
+        TEST_SERVER.with(|s| *s.borrow_mut() = Some(Box::new(move || Scripted::open(Some(5), true, fetch.clone(), &log))));
         let report = router.flush_pending(&Mutex::new(Journal::default()));
         TEST_SERVER.with(|s| *s.borrow_mut() = None);
 

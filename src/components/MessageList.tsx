@@ -163,9 +163,13 @@ const Row = memo(function Row({
     <div
       id={rowId(m.id)}
       role="option"
-      // Focus porté par la liste (aria-activedescendant) : la ligne est
-      // focalisable par programme, hors de l'ordre de tabulation.
+      // Focus porté par la liste (aria-activedescendant) : la ligne reste
+      // focalisable par programme (option, règle Sonar S6852), mais le focus
+      // reçu d'un clic est aussitôt rendu à la liste. Une ligne focalisée
+      // l'emportait en disparaissant (Suppr), et les flèches ne répondaient
+      // plus (lot R2).
       tabIndex={-1}
+      onFocus={(e) => e.currentTarget.closest<HTMLElement>("[role='listbox']")?.focus()}
       aria-selected={selected}
       className={classes}
       draggable
