@@ -326,16 +326,22 @@ impl Server {
                 }
                 ("UID", "MOVE") => {
                     let set = tokens[2].text().unwrap();
-                    let dest = self.find(&tokens[3].text().unwrap()).unwrap();
-                    let src = self.selected.unwrap();
-                    let moving: Vec<Msg> = self.boxes[src].messages.iter().filter(|m| Self::matches(&set, m.uid)).cloned().collect();
-                    self.boxes[src].expunge_where(|m| Self::matches(&set, m.uid));
-                    for mut m in moving {
-                        m.uid = self.boxes[dest].next_uid;
-                        m.modseq = self.boxes[dest].bump();
-                        self.boxes[dest].next_uid += 1;
-                        self.boxes[dest].messages.push(m);
-                        reply += "* 1 EXPUNGE\r\n";
+                    match self.find(&tokens[3].text().unwrap()) {
+                        // Dossier cible supprimé ailleurs (lot S1).
+                        None => status = "NO [TRYCREATE] Dossier inexistant".into(),
+                        Some(dest) => {
+                            let src = self.selected.unwrap();
+                            let moving: Vec<Msg> =
+                                self.boxes[src].messages.iter().filter(|m| Self::matches(&set, m.uid)).cloned().collect();
+                            self.boxes[src].expunge_where(|m| Self::matches(&set, m.uid));
+                            for mut m in moving {
+                                m.uid = self.boxes[dest].next_uid;
+                                m.modseq = self.boxes[dest].bump();
+                                self.boxes[dest].next_uid += 1;
+                                self.boxes[dest].messages.push(m);
+                                reply += "* 1 EXPUNGE\r\n";
+                            }
+                        }
                     }
                 }
                 ("UID", "EXPUNGE") => {
@@ -544,6 +550,21 @@ fn unknown_folder_and_bad_command() {
     assert!(matches!(c.select("Nulle part"), Err(Error::No(_))));
     assert!(matches!(c.run("FROBNICATE"), Err(Error::Bad(_))));
     // La session reste utilisable après une erreur.
+    c.noop().unwrap();
+}
+
+#[test]
+fn s1_dossier_cible_absent() {
+    // `NO [TRYCREATE]` : refus distingué, mais affiché comme les autres.
+    let mut c = Client::connect(start("")).unwrap();
+    c.login(USER, PASS).unwrap();
+    c.select("INBOX").unwrap();
+    let err = c.uid_move(&[1], "Supprimé ailleurs").unwrap_err();
+    assert!(matches!(&err, Error::NoMailbox(t) if t.contains("inexistant")), "{err:?}");
+    assert!(err.to_string().contains("inexistant"), "{err}");
+    assert!(!err.is_connection_lost());
+    // Un refus sans code reste un refus ordinaire.
+    assert!(matches!(c.select("Nulle part"), Err(Error::No(_))));
     c.noop().unwrap();
 }
 

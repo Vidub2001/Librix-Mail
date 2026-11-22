@@ -52,7 +52,7 @@ Les versions sont construites à partir de ce dépôt par GitHub Actions. Chacun
 
 Les fichiers Windows ne sont pas encore signés : Windows peut afficher un avertissement à la première installation.
 
-> **État :** version 0.3.7, utilisée tous les jours par son auteur. Les retours et signalements sont les bienvenus.
+> **État :** version 0.3.8, utilisée tous les jours par son auteur. Les retours et signalements sont les bienvenus.
 
 ## Fonctionnalités
 
@@ -83,7 +83,7 @@ Les fichiers Windows ne sont pas encore signés : Windows peut afficher un avert
   réseau, fermeture) est repris au démarrage suivant, sans doublon ni perte. Clic droit ›
   « Déplacer » : dossiers récents, recherche parmi les dossiers de tous les comptes, ou nouveau
   dossier dans le compte choisi.
-- Import et export des messages : un message en `.eml`, un dossier en `.mbox` (Téléchargements) ; import de `.eml` et `.mbox` (Thunderbird compris) dans le dossier choisi.
+- Import et export des messages : un message en `.eml`, un dossier en `.mbox` (Téléchargements) ; import de `.eml` et `.mbox` (y compris ceux exportés par d'autres logiciels de messagerie) dans le dossier choisi.
 - Import et export des agendas (`.ics`) et des carnets d'adresses (`.vcf`), sans doublon à un second import.
 - Recherche dans tous les dossiers de tous les comptes, contenu compris, avec critères : `de:`, `à:`, `objet:`, `avant:16/11/2026`, `après:`, `est:nonlu`, `est:suivi`, `avec:pj`, `"phrase exacte"`, `-mot` pour exclure.
 - Nouveaux messages en temps réel (IMAP IDLE) et notifications du bureau ; synchronisation
@@ -172,7 +172,7 @@ sont décrits dans **[docs/COMPILATION.md](docs/COMPILATION.md)**.
 
 Paramètres (engrenage) → Comptes → « Ajouter un compte ». Votre nom et votre adresse suffisent :
 Librix Mail cherche les réglages (fournisseurs connus, copie intégrée de la base des fournisseurs
-de Thunderbird, DNS du domaine, fichier publié par le domaine, puis noms habituels essayés sans mot
+de Mozilla, DNS du domaine, fichier publié par le domaine, puis noms habituels essayés sans mot
 de passe), montre d'où ils viennent, puis teste le compte avant de l'ajouter. Aucune requête ne
 part vers un service tiers, et des serveurs hors de votre domaine sont signalés. « Modifier à la
 main » ouvre le formulaire complet, prérempli. Proton Mail passe par Proton Mail Bridge : son

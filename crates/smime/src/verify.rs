@@ -71,6 +71,10 @@ pub struct Checked {
     /// Also given when only its authority is unknown here (Librix Mail, audit S5): the verdict
     /// then says it isn't verified.
     pub certificate: Option<Vec<u8>>,
+    /// Où les autorités du signataire publient leurs listes de certificats révoqués : la sienne,
+    /// puis celles des autorités intermédiaires du chemin de confiance (Librix Mail, lots G2c et
+    /// S4), pour que l'hôte les télécharge.
+    pub crl_urls: Vec<String>,
 }
 
 /// Check `signed` against `context`. `None` when the CMS isn't SignedData at all (an Encrypted
@@ -174,7 +178,7 @@ impl<'a> Digests<'a> {
 }
 
 fn unchecked(why: Why) -> Checked {
-    Checked { signature: DigitalSignature::bare(SignatureFormat::Smime, Verdict::Unchecked, why), certificate: None }
+    Checked { signature: DigitalSignature::bare(SignatureFormat::Smime, Verdict::Unchecked, why), certificate: None, crl_urls: Vec::new() }
 }
 
 struct ContentInfoParts<'a> {
@@ -364,9 +368,11 @@ fn one_signer(
             _ if ran_out => unchecked(Why::TooMuch),
             // No key it names made it: changed after signing, or never signed by any of them;
             // nobody is named, since none of them fits.
-            Some(Fault::Invalid) | None => {
-                Checked { signature: DigitalSignature::bare(SignatureFormat::Smime, Verdict::Changed, Why::Altered), certificate: None }
-            }
+            Some(Fault::Invalid) | None => Checked {
+                signature: DigitalSignature::bare(SignatureFormat::Smime, Verdict::Changed, Why::Altered),
+                certificate: None,
+                crl_urls: Vec::new(),
+            },
             Some(f) => unchecked(why_not(f)),
         };
     };
@@ -382,6 +388,7 @@ fn one_signer(
             coverage: Coverage::Part,
         },
         certificate: None,
+        crl_urls: Vec::new(),
     };
     if attributes.is_some() {
         // The attributes are the signer's own words now: what they say of the content holds.
@@ -397,7 +404,11 @@ fn one_signer(
     }
     // (An authority's certificate never signs mail, whatever else it allows.)
     let for_email = cert.for_email() && !cert.is_authority();
-    let trust = chain::trust(cert, pool, context.anchors, context.now, budget)
+    let path = chain::trusted_path(cert, pool, context.anchors, context.now, budget);
+    let trust = path
+        .as_ref()
+        .map(|_| ())
+        .map_err(|why| *why)
         .and_then(|()| for_email.then_some(()).ok_or(Why::NotForEmail))
         .and_then(|()| if cert.is_for(context.from) { Ok(()) } else { Err(Why::AddressMismatch) });
     // Révocation (Librix Mail, lot G2c) : d'après une liste que signe une autorité de confiance
@@ -410,7 +421,14 @@ fn one_signer(
                     issuers.push(issuer);
                 }
             }
-            revocations.status(cert, &issuers, context.now)
+            let leaf = revocations.status(cert, &issuers, context.now);
+            // Chaque autorité intermédiaire, d'après la liste de celle qui l'a délivrée sur ce
+            // chemin (lot S4) ; l'ancre, en dernier, est garantie par l'hôte.
+            let above = path.as_deref().unwrap_or_default().windows(2).map(|pair| match pair {
+                [authority, issuer] => revocations.status(authority, &[*issuer], context.now),
+                _ => Revocation::Unknown,
+            });
+            crate::crl::chain_status(std::iter::once(leaf).chain(above))
         }
         _ => Revocation::Unknown,
     };
@@ -432,6 +450,13 @@ fn one_signer(
         r.certificate = Some(cert.der().to_vec());
     }
     r.signature.revocation_checked = revocation == Revocation::Good;
+    // Listes à télécharger : celle du signataire, puis celles des autorités du chemin.
+    r.crl_urls = cert.crl_urls();
+    for authority in path.as_deref().unwrap_or_default() {
+        if !context.anchors.named(authority.subject()).any(|a| a == *authority) {
+            r.crl_urls.extend(authority.crl_urls());
+        }
+    }
     // The signer's address that is the sender's comes first: it is the one said.
     if let (Some(address), Some(signer)) = (cert.address_for(context.from), r.signature.signer.as_mut()) {
         let shown = crate::signature::signer_text(&address);

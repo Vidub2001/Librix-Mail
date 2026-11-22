@@ -1,6 +1,6 @@
 [package]
 name = "librixmail"
-version = "0.3.7"
+version = "0.3.8"
 description = "Client mail multi-comptes IMAP, avec agenda et contacts"
 edition = "2021"
 # Version minimale de Rust : celle qu'exige mail-parser 1.0.
@@ -62,6 +62,10 @@ librix-smime = { path = "../crates/smime" }
 rusqlite = { version = "0.41", features = ["bundled-sqlcipher"] }
 # Secret Service : GNOME Keyring, KWallet.
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+# Zone de notification par StatusNotifierItem sur D-Bus, sans GTK ni
+# libayatana-appindicator, déclarée obsolète (lot S3) : même version que celle
+# de Tauri, dont l'option `ksni` est alors retenue (tray-icon 0.25 et plus).
+tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
 
 [target.'cfg(windows)'.dependencies]
 rusqlite = { version = "0.41", features = ["bundled-sqlcipher-vendored-openssl"] }

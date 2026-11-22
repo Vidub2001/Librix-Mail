@@ -287,6 +287,20 @@ fn append_once(
     s.append(mailbox, flags, date, raw)
 }
 
+/// Premier dépôt d'une copie, ou nouvel essai (la précédente a pu aboutir).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Attempt {
+    First,
+    Again,
+}
+
+/// En-têtes avec des octets hors ASCII : adresse accentuée écrite en UTF-8
+/// (RFC 6532, lot H2).
+fn has_8bit_headers(raw: &[u8]) -> bool {
+    let end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
+    raw.get(..end).unwrap_or(raw).iter().any(|b| !b.is_ascii())
+}
+
 /// Élément `FETCH` qui porte le message complet de `uid`. Un serveur peut
 /// glisser avant lui une réponse de drapeaux seuls (changement venu d'un autre
 /// appareil, QRESYNC) ou rendre `BODY[] NIL` : un message vide déposé ailleurs
@@ -358,7 +372,9 @@ fn present_uids(s: &mut Session, uids: &[u32]) -> imap_lite::Result<HashSet<u32>
 /// certains serveurs refusent alors toute la commande (« Message set not
 /// found », lot R). Après un refus, l'action est refaite sur les seuls messages
 /// encore présents. Renvoie les UID disparus, à retirer du cache. Un refus qui
-/// ne s'explique pas par un message disparu reste une erreur.
+/// ne s'explique pas par un message disparu reste une erreur, et un dossier
+/// cible absent (`NO [TRYCREATE]`, [`imap_lite::Error::NoMailbox`]) en est une
+/// d'emblée, sans vérification (lot S1).
 fn on_present(
     s: &mut Session,
     mailbox: &str,
@@ -2434,12 +2450,9 @@ impl Router {
             Some(folder) if service_keeps_copy => report.saved_in = self.folder(&folder).map(|f| f.name),
             Some(folder) => {
                 let (_, mailbox) = Self::split_folder(&folder)?;
-                let flags = vec!["\\Seen".to_string()];
-                let mut attempts = 0;
-                let saved =
-                    self.imap_account(account_id)?.run(Lane::User, |s| append_once(s, &mut attempts, &mailbox, &flags, Some(date), &kept));
+                let saved = self.deposit_sent(account_id, &mailbox, date, &kept, Attempt::First);
                 match saved {
-                    Ok(_) => report.saved_in = self.folder(&folder).map(|f| f.name),
+                    Ok(()) => report.saved_in = self.folder(&folder).map(|f| f.name),
                     // Serveur IMAP injoignable : la copie attend le retour du réseau
                     // au lieu d'être perdue (relecture complète n° 11).
                     Err(e) if is_network_error(&e) => {
@@ -2788,6 +2801,30 @@ impl Router {
         }
     }
 
+    /// Dépose la copie d'un message envoyé dans `mailbox` (chemin du serveur).
+    ///
+    /// Un serveur `UTF8=ACCEPT` refuse le dépôt d'un message à en-têtes en
+    /// UTF-8 tant que `ENABLE UTF8=ACCEPT` n'a pas été fait (RFC 9755, § 4) ;
+    /// or `ENABLE` n'est permis qu'avant toute sélection, et change ensuite la
+    /// forme des noms de dossiers rendus. Ce dépôt-là se fait donc sur une
+    /// connexion à part, fermée aussitôt, le nom du dossier en UTF-8 (lot S2).
+    /// Les autres passent par la connexion habituelle.
+    fn deposit_sent(&self, account_id: &str, mailbox: &str, date: i64, raw: &[u8], attempt: Attempt) -> Result<(), String> {
+        let account = self.imap_account(account_id).map_err(|e| e.to_string())?;
+        let flags = vec!["\\Seen".to_string()];
+        // Nouvel essai : la copie a peut-être été déposée avant la coupure.
+        let mut attempts = u32::from(attempt == Attempt::Again);
+        if has_8bit_headers(raw) && account.run(Lane::User, |s| Ok(s.has_capability("UTF8=ACCEPT")))? {
+            let mut s = open_session(&account.config.imap)?;
+            s.enable(&["UTF8=ACCEPT"]).map_err(|e| e.to_string())?;
+            let name = imap_lite::utf7::decode(mailbox);
+            let saved = append_once(&mut s, &mut attempts, &name, &flags, Some(date), raw);
+            let _ = s.logout();
+            return saved.map(|_| ()).map_err(|e| e.to_string());
+        }
+        account.run(Lane::User, |s| append_once(s, &mut attempts, mailbox, &flags, Some(date), raw)).map(|_| ())
+    }
+
     /// Messages concernés par des actions en attente du réseau.
     pub fn pending_count(&self) -> u32 {
         self.cache().pending_count().unwrap_or(0)
@@ -2806,21 +2843,14 @@ impl Router {
         // Copies de messages envoyés : le premier essai cherche déjà la copie par
         // son `Message-ID` (le dépôt interrompu a pu aboutir), pour ne pas la doubler.
         for copy in self.cache().sent_pending().unwrap_or_default() {
-            let flags = vec!["\\Seen".to_string()];
-            let mut attempts = 1;
-            let outcome = match self.imap_account(&copy.account) {
-                Ok(account) => {
-                    account.run(Lane::User, |s| append_once(s, &mut attempts, &copy.mailbox, &flags, Some(copy.date), &copy.raw))
-                }
-                Err(e) => Err(e.to_string()),
-            };
+            let outcome = self.deposit_sent(&copy.account, &copy.mailbox, copy.date, &copy.raw, Attempt::Again);
             match outcome {
                 Err(e) if is_network_error(&e) => {
                     report.remaining = self.pending_count().saturating_add(u32::try_from(shared.unfinished_count()).unwrap_or(u32::MAX));
                     return report;
                 }
                 Err(e) => crate::diag::report(&format_args!("copie d'un message envoyé abandonnée : {e}")),
-                Ok(_) => report.done += 1,
+                Ok(()) => report.done += 1,
             }
             let _ = self.cache().sent_remove(copy.id);
         }
@@ -3386,8 +3416,13 @@ mod tests {
 
         /// Comme [`Scripted::refusing`], avec l'UID trouvé par `UID SEARCH` (lot R).
         fn refusing_with(refused: &[&str], found: Option<u32>, received: &Arc<Mutex<Vec<String>>>) -> Session {
+            Self::with_caps("IMAP4rev1 MOVE UIDPLUS", refused, found, received)
+        }
+
+        /// Serveur qui annonce les capacités `caps` (lot S2 : `UTF8=ACCEPT`).
+        fn with_caps(caps: &str, refused: &[&str], found: Option<u32>, received: &Arc<Mutex<Vec<String>>>) -> Session {
             let server = Scripted {
-                to_client: b"* OK [CAPABILITY IMAP4rev1 MOVE UIDPLUS] pret\r\n".iter().copied().collect(),
+                to_client: format!("* OK [CAPABILITY {caps}] pret\r\n").bytes().collect(),
                 line: Vec::new(),
                 literal: 0,
                 pending: String::new(),
@@ -3627,6 +3662,41 @@ mod tests {
         assert_eq!(lock_cache(&cache).cached_uids("mailo", "INBOX").unwrap(), Vec::<u32>::new(), "les deux quittent la liste");
         let moves = commands(&received, "> UID MOVE");
         assert!(moves.last().is_some_and(|m| m.starts_with("> UID MOVE 9 ")), "{moves:?}");
+    }
+
+    #[test]
+    fn s1_dossier_cible_absent_sans_verification() {
+        // `NO [TRYCREATE]` : les messages sont intacts, inutile de chercher lesquels sont partis.
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let mut s = Scripted::open(Some(5), true, String::new(), &received);
+        let mut attempts = 0;
+        let refused = on_present(&mut s, "INBOX", None, &[5], |s, uids| move_once(s, &mut attempts, "INBOX", None, uids, "Projets"));
+        assert!(matches!(refused, Err(imap_lite::Error::NoMailbox(_))), "{refused:?}");
+        assert!(commands(&received, "> UID SEARCH").is_empty(), "aucune vérification : {:?}", received.lock().unwrap());
+    }
+
+    #[test]
+    fn s2_copie_envoyee_en_utf8_sur_une_connexion_a_part() {
+        let cache = Arc::new(Mutex::new(Cache::in_memory().unwrap()));
+        let router = Router::new(vec![config("mailo")], Arc::clone(&cache));
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&received);
+        let caps = "IMAP4rev1 MOVE UIDPLUS ENABLE UTF8=ACCEPT";
+        TEST_SERVER.with(|s| *s.borrow_mut() = Some(Box::new(move || Scripted::with_caps(caps, &[], None, &log))));
+        let accented = "Message-ID: <envoi-2@example.com>\r\nTo: rené@example.fr\r\nSubject: Essai\r\n\r\nCorps\r\n";
+        let utf8 = router.deposit_sent("mailo", "&AMk-l&AOk-ments envoy&AOk-s", 1_700_000_000, accented.as_bytes(), Attempt::First);
+        let ascii = router.deposit_sent("mailo", "Sent", 1_700_000_000, SENT, Attempt::First);
+        TEST_SERVER.with(|s| *s.borrow_mut() = None);
+        assert_eq!(utf8, Ok(()));
+        assert_eq!(ascii, Ok(()));
+        let all = received.lock().unwrap().clone();
+        let enables: Vec<&String> = all.iter().filter(|c| c.starts_with("> ENABLE")).collect();
+        assert_eq!(enables, ["> ENABLE UTF8=ACCEPT"], "une seule fois, pour le message accentué : {all:?}");
+        let appends: Vec<&String> = all.iter().filter(|c| c.starts_with("> APPEND")).collect();
+        assert!(appends.first().is_some_and(|c| c.starts_with("> APPEND \"Éléments envoyés\"")), "nom en UTF-8 : {appends:?}");
+        assert!(appends.get(1).is_some_and(|c| c.starts_with("> APPEND \"Sent\"")), "{appends:?}");
+        assert!(has_8bit_headers(accented.as_bytes()) && !has_8bit_headers(SENT));
+        assert!(!has_8bit_headers(b"Subject: x\r\n\r\nCorps accentu\xc3\xa9\r\n"), "seul l'en-tête compte");
     }
 
     #[test]
@@ -3899,8 +3969,8 @@ mod tests {
         );
         let received = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&received);
-        // Le message 5 est toujours dans la boîte (`UID SEARCH UID 5`, lot R) :
-        // le refus vient du dossier cible, pas d'un message disparu.
+        // Le refus vient du dossier cible (`NO [TRYCREATE]`, lot S1), pas d'un
+        // message disparu ; le message 5 est d'ailleurs toujours dans la boîte.
         TEST_SERVER.with(|s| *s.borrow_mut() = Some(Box::new(move || Scripted::open(Some(5), true, fetch.clone(), &log))));
         let report = router.flush_pending(&Mutex::new(Journal::default()));
         TEST_SERVER.with(|s| *s.borrow_mut() = None);

@@ -75,10 +75,22 @@ impl Anchors {
 /// (Validity is checked at the time of the check, not the signing time the signer gives: that is
 /// the signer's own word, and a certificate that ran out or was replaced since is said.)
 pub fn trust(leaf: &Cert, pool: &[Cert], anchors: &Anchors, now: Timestamp, budget: &mut usize) -> Result<(), Why> {
+    trusted_path(leaf, pool, anchors, now, budget).map(|_| ())
+}
+
+/// [`trust`], with the path that holds: the certificates above `leaf`, the anchor last (Librix
+/// Mail, lot S4 : les autorités intermédiaires dont la révocation est contrôlée).
+pub(crate) fn trusted_path<'a>(
+    leaf: &'a Cert,
+    pool: &'a [Cert],
+    anchors: &'a Anchors,
+    now: Timestamp,
+    budget: &mut usize,
+) -> Result<Vec<&'a Cert>, Why> {
     let mut search = Search { leaf, pool, anchors, now, budget, weak: false, refused: None, ran_out: false };
     let mut path = Vec::new();
     if search.walk(leaf, &mut path) {
-        return Ok(());
+        return Ok(path);
     }
     Err(match search.refused {
         // (A path left untried may hold: no answer, rather than the first refusal's.)

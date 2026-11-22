@@ -52,7 +52,7 @@ Releases are built from this repository by GitHub Actions. Each one comes with `
 
 Windows files are not signed yet, so Windows may show a warning on first install.
 
-> **Status:** version 0.3.7, used every day by its author. Feedback and bug reports are welcome.
+> **Status:** version 0.3.8, used every day by its author. Feedback and bug reports are welcome.
 
 ## Features
 
@@ -82,7 +82,7 @@ Windows files are not signed yet, so Windows may show a warning on first install
 - Moving and deleting across accounts, with a journal: an interrupted move (network loss, app
   closed) is resumed at next start-up, without duplicates or loss. Right-click › “Move”: recent
   folders, search across the folders of every account, or a new folder in the chosen account.
-- Message import and export: one message as `.eml`, a folder as `.mbox` (Downloads); `.eml` and `.mbox` files (Thunderbird's included) imported into the chosen folder.
+- Message import and export: one message as `.eml`, a folder as `.mbox` (Downloads); `.eml` and `.mbox` files (including those exported by other mail software) imported into the chosen folder.
 - Calendar (`.ics`) and address book (`.vcf`) import and export, without duplicates when imported twice.
 - Search across every folder of every account, message bodies included, with criteria: `from:`, `to:`, `subject:`, `before:2026-11-16`, `after:`, `is:unread`, `is:flagged`, `has:attachment`, `"exact phrase"`, `-word` to exclude.
 - Real-time new mail (IMAP IDLE) and desktop notifications; configurable automatic sync,
@@ -163,7 +163,7 @@ Release builds, installers, the Windows portable ZIP and troubleshooting are cov
 ## Adding an account
 
 Settings (gear icon) → Accounts → "Add account". Your name and address are enough: Librix Mail
-looks up the settings (known providers, a built-in copy of Thunderbird's provider database, the
+looks up the settings (known providers, a built-in copy of Mozilla's provider database, the
 domain's DNS, the file published by the domain, then usual names checked without a password),
 shows where they came from, and tests the account before adding it. No request goes to a third-party
 service, and servers outside your domain are flagged. "Edit by hand" opens the full form,

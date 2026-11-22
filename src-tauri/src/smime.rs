@@ -348,11 +348,10 @@ pub(crate) fn check(raw: &[u8], now: i64) -> Option<SignatureInfo> {
         known: &[],
         coverage: if parts.whole { Coverage::Whole } else { Coverage::Part },
     };
-    let checked = librix_smime::check_revoked(signed, &context, &revocations())?;
-    // Liste de l'autorité du signataire : téléchargée en arrière-plan pour les prochaines fois.
-    if let Some(certificate) = checked.certificate.as_deref() {
-        fetch_revocations(librix_smime::cert_crl_urls(certificate), now);
-    }
+    let mut checked = librix_smime::check_revoked(signed, &context, &revocations())?;
+    // Listes de l'autorité du signataire et des autorités intermédiaires de sa chaîne (lot S4) :
+    // téléchargées en arrière-plan pour les prochaines fois.
+    fetch_revocations(std::mem::take(&mut checked.crl_urls), now);
     let mut signature = checked.signature;
     // Certificat du signataire, pour lui écrire chiffré (lot D3b) : seulement quand la
     // signature est la sienne et que son certificat est pour l'adresse `From`.

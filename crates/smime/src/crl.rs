@@ -10,8 +10,9 @@
 //! Une liste ne compte que si elle est signée par une autorité de confiance du certificat
 //! (celle qui l'a délivré), qu'elle est en cours de validité (`thisUpdate` passé, `nextUpdate`
 //! à venir) et qu'elle n'a pas d'extension critique (listes partielles, indirectes, deltas) :
-//! sinon la révocation est dite non vérifiée, jamais « bonne ». Seul le certificat du signataire
-//! est contrôlé, pas les autorités intermédiaires.
+//! sinon la révocation est dite non vérifiée, jamais « bonne ». Le certificat du signataire est
+//! contrôlé, et depuis le lot S4 chaque autorité intermédiaire du chemin de confiance, d'après la
+//! liste de l'autorité au-dessus d'elle ; l'ancre, que l'hôte garantit lui-même, ne l'est pas.
 
 use der::Decode;
 use spki::AlgorithmIdentifierOwned;
@@ -192,4 +193,18 @@ impl Revocations {
         }
         if good { Revocation::Good } else { Revocation::Unknown }
     }
+}
+
+/// Ce que disent les listes de toute une chaîne : révoquée dès qu'un certificat l'est, contrôlée
+/// seulement si chacun l'est (lot S4).
+pub(crate) fn chain_status(statuses: impl IntoIterator<Item = Revocation>) -> Revocation {
+    let mut all_good = true;
+    for status in statuses {
+        match status {
+            Revocation::Revoked => return Revocation::Revoked,
+            Revocation::Unknown => all_good = false,
+            Revocation::Good => {}
+        }
+    }
+    if all_good { Revocation::Good } else { Revocation::Unknown }
 }

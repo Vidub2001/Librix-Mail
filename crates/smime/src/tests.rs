@@ -1181,3 +1181,51 @@ fn g2c_adresse_de_la_liste_dans_le_certificat() {
     assert_eq!(cert_crl_urls(&ada.der), ["http://crl.example.org/root.crl"], "http et https seulement");
     assert!(cert_crl_urls(&root.der).is_empty());
 }
+
+// ------------------------------------------------------------------ autorités intermédiaires (lot S4 de Librix Mail)
+
+/// La signature d'Ada, délivrée par `inter` sous `root`, vérifiée avec les listes `lists`.
+fn checked_through(ada: &Made, inter: &Made, root: &Made, lists: &[&[u8]]) -> Checked {
+    let anchors = Anchors::new([root.der.as_slice()]);
+    let cms = sign(CONTENT, ada, &[ada, inter], false);
+    let context = Context { anchors: &anchors, from: "ada@example.org", now: NOW, known: &[], coverage: Coverage::Whole };
+    check_revoked(Signed::Detached { content: CONTENT, signature: &cms }, &context, &Revocations::new(lists.iter().copied())).unwrap()
+}
+
+#[test]
+fn s4_autorite_intermediaire_revoquee() {
+    let root = root("Example Root");
+    let inter = authority("Example Mail CA", &root, |_| {});
+    let ada = signer_by("Ada", "ada@example.org", &inter);
+    let root_revokes_inter = crl(&root, &[&inter]);
+    let root_clean = crl(&root, &[]);
+    let inter_clean = crl(&inter, &[]);
+
+    // L'autorité intermédiaire révoquée par la racine : signature non vérifiée, rien de gardé.
+    let c = checked_through(&ada, &inter, &root, &[root_revokes_inter.as_slice(), inter_clean.as_slice()]);
+    assert_eq!((c.signature.verdict, c.signature.why), (Verdict::NotVerified, Some(Why::Revoked)));
+    assert!(c.certificate.is_none(), "chaîne révoquée : certificat pas gardé pour chiffrer");
+
+    // Les deux listes valables, sans révocation : contrôlée de bout en bout.
+    let c = checked_through(&ada, &inter, &root, &[root_clean.as_slice(), inter_clean.as_slice()]);
+    assert_eq!(c.signature.verdict, Verdict::Verified);
+    assert!(c.signature.revocation_checked);
+
+    // Liste de la racine absente : vérifiée, mais la révocation n'est pas dite contrôlée.
+    let c = checked_through(&ada, &inter, &root, &[inter_clean.as_slice()]);
+    assert_eq!(c.signature.verdict, Verdict::Verified);
+    assert!(!c.signature.revocation_checked, "l'intermédiaire n'a pas pu être contrôlée");
+}
+
+#[test]
+fn s4_adresses_des_listes_de_toute_la_chaine() {
+    let root = root("Example Root");
+    let inter = authority("Example Mail CA", &root, |p| {
+        p.crl_distribution_points = vec![rcgen::CrlDistributionPoint { uris: vec!["http://crl.example.org/root.crl".into()] }];
+    });
+    let mut params = signer_params("Ada", "ada@example.org");
+    params.crl_distribution_points = vec![rcgen::CrlDistributionPoint { uris: vec!["http://crl.example.org/mail-ca.crl".into()] }];
+    let ada = issued(params, key(&rcgen::PKCS_ECDSA_P256_SHA256), &inter);
+    let c = checked_through(&ada, &inter, &root, &[]);
+    assert_eq!(c.crl_urls, ["http://crl.example.org/mail-ca.crl", "http://crl.example.org/root.crl"], "le signataire, puis son autorité");
+}

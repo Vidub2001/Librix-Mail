@@ -291,6 +291,17 @@ impl FetchItem {
 /// certains serveurs refusent. 500 UID font au plus 5 500 caractères.
 const UIDS_PER_COMMAND: usize = 500;
 
+/// Erreur d'une réponse étiquetée qui n'est pas `OK` : `NO [TRYCREATE]`
+/// (dossier visé absent) est distinguée des autres refus.
+fn refusal(kind: StatusKind, code: Option<&str>, text: String) -> Error {
+    let try_create = code.and_then(|c| c.split_whitespace().next()).is_some_and(|c| c.eq_ignore_ascii_case("TRYCREATE"));
+    match kind {
+        StatusKind::No if try_create => Error::NoMailbox(text),
+        StatusKind::No => Error::No(text),
+        _ => Error::Bad(text),
+    }
+}
+
 /// Ensemble d'UID compact : `[1,2,3,7]` → `1:3,7`.
 pub(crate) fn uid_set(uids: &[u32]) -> String {
     let mut sorted = uids.to_vec();
@@ -633,12 +644,7 @@ impl<S: Read + Write> Client<S> {
             self.note_alert(&response);
             match response {
                 Response::Continuation(_) => return Ok(()),
-                Response::Status { tag: Some(t), kind, text, .. } if t == tag => {
-                    return Err(match kind {
-                        StatusKind::No => Error::No(text),
-                        _ => Error::Bad(text),
-                    })
-                }
+                Response::Status { tag: Some(t), kind, code, text } if t == tag => return Err(refusal(kind, code.as_deref(), text)),
                 Response::Status { tag: None, kind: StatusKind::Bye, text, .. } => return Err(Error::Bye(text)),
                 other => data.push(other),
             }
@@ -658,8 +664,7 @@ impl<S: Read + Write> Client<S> {
                 Response::Status { tag: Some(t), kind, code, text } if t == tag => {
                     return match kind {
                         StatusKind::Ok => Ok(Outcome { data, code, text }),
-                        StatusKind::No => Err(Error::No(text)),
-                        _ => Err(Error::Bad(text)),
+                        _ => Err(refusal(kind, code.as_deref(), text)),
                     };
                 }
                 Response::Status { tag: Some(_), .. } => {} // réponse orpheline : ignorée

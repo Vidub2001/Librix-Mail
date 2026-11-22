@@ -52,7 +52,7 @@ Las versiones se compilan a partir de este repositorio con GitHub Actions. Cada 
 
 Los archivos de Windows aún no están firmados: Windows puede mostrar un aviso en la primera instalación.
 
-> **Estado:** versión 0.3.7, usada a diario por su autor. Se agradecen los comentarios y los avisos de errores.
+> **Estado:** versión 0.3.8, usada a diario por su autor. Se agradecen los comentarios y los avisos de errores.
 
 ## Funciones
 
@@ -83,7 +83,7 @@ Los archivos de Windows aún no están firmados: Windows puede mostrar un aviso 
   cerrada) se reanuda en el siguiente inicio, sin duplicados ni pérdidas. Clic derecho › «Mover»:
   carpetas recientes, búsqueda entre las carpetas de todas las cuentas o una carpeta nueva en la
   cuenta elegida.
-- Importación y exportación de mensajes: un mensaje en `.eml`, una carpeta en `.mbox` (Descargas); importación de `.eml` y `.mbox` (incluidos los de Thunderbird) en la carpeta elegida.
+- Importación y exportación de mensajes: un mensaje en `.eml`, una carpeta en `.mbox` (Descargas); importación de `.eml` y `.mbox` (incluidos los exportados por otros programas de correo) en la carpeta elegida.
 - Importación y exportación de calendarios (`.ics`) y libretas de direcciones (`.vcf`), sin duplicados al importar dos veces.
 - Búsqueda en todas las carpetas de todas las cuentas, incluido el contenido de los mensajes, con criterios: `from:`, `to:`, `subject:`, `before:2026-11-16`, `after:`, `is:unread`, `is:flagged`, `has:attachment`, `"frase exacta"`, `-palabra` para excluir.
 - Correo nuevo en tiempo real (IMAP IDLE) y notificaciones de escritorio; sincronización automática
@@ -171,7 +171,7 @@ se describen en **[docs/COMPILATION.es.md](docs/COMPILATION.es.md)**.
 
 Configuración (icono de engranaje) → Cuentas → «Agregar cuenta». Su nombre y su dirección bastan:
 Librix Mail busca la configuración (proveedores conocidos, copia integrada de la base de proveedores
-de Thunderbird, DNS del dominio, archivo publicado por el dominio y, por último, nombres habituales
+de Mozilla, DNS del dominio, archivo publicado por el dominio y, por último, nombres habituales
 comprobados sin contraseña), muestra de dónde procede y prueba la cuenta antes de agregarla. No se
 envía ninguna petición a un servicio de terceros, y los servidores fuera de su dominio se señalan.
 «Editar a mano» abre el formulario completo, ya rellenado. Proton Mail pasa por Proton Mail Bridge:

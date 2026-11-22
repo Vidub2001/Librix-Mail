@@ -9,6 +9,11 @@ pub enum Error {
     Io(std::io::Error),
     /// Le serveur a refusé la commande (réponse `NO`).
     No(String),
+    /// Le dossier visé n'existe pas : réponse `NO [TRYCREATE]` (RFC 9051,
+    /// § 7.1) à une copie, un déplacement ou un dépôt vers un dossier supprimé
+    /// ailleurs. Distinguée de [`Error::No`] : l'appelant sait que les messages
+    /// sont intacts et qu'il est inutile de vérifier leur présence.
+    NoMailbox(String),
     /// Le serveur n'a pas compris la commande (réponse `BAD`).
     Bad(String),
     /// Le serveur a fermé la session (`BYE`).
@@ -29,7 +34,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Io(e) => write!(f, "{} {e}", pick("erreur réseau :", "network error:", "error de red:")),
-            Error::No(t) => write!(f, "{} {t}", pick("refusé par le serveur :", "refused by the server:", "rechazado por el servidor:")),
+            Error::No(t) | Error::NoMailbox(t) => {
+                write!(f, "{} {t}", pick("refusé par le serveur :", "refused by the server:", "rechazado por el servidor:"))
+            }
             Error::Bad(t) => write!(
                 f,
                 "{} {t}",
