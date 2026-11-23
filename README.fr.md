@@ -52,7 +52,7 @@ Les versions sont construites à partir de ce dépôt par GitHub Actions. Chacun
 
 Les fichiers Windows ne sont pas encore signés : Windows peut afficher un avertissement à la première installation.
 
-> **État :** version 0.3.8, utilisée tous les jours par son auteur. Les retours et signalements sont les bienvenus.
+> **État :** version 0.3.9, utilisée tous les jours par son auteur. Les retours et signalements sont les bienvenus.
 
 ## Fonctionnalités
 
@@ -76,7 +76,7 @@ Les fichiers Windows ne sont pas encore signés : Windows peut afficher un avert
 - Messages chiffrés en S/MIME : lus avec ce même certificat, déchiffrés en mémoire (rien en clair
   sur le disque) ; envoyés chiffrés avec le bouton « Chiffrer », grâce aux certificats des
   correspondants gardés sur leurs messages signés.
-- Rédaction : HTML ou texte simple (format par défaut réglable), signatures par compte, réponses et
+- Rédaction : HTML ou texte simple (format par défaut réglable), signatures par compte (mise en forme et texte simple), réponses et
   transferts, pièces jointes par glisser-déposer, brouillons enregistrés automatiquement,
   suggestions de destinataires, **avertissement de pièce jointe oubliée**.
 - Déplacement et suppression entre comptes, avec journal : un déplacement interrompu (coupure

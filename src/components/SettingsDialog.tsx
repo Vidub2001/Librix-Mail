@@ -44,13 +44,23 @@ import {
   CalendarLtr20Regular,
   Filter20Regular,
 } from "@fluentui/react-icons";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { colorName } from "../colors";
 import { t } from "../i18n";
 import { AboutSection } from "./AboutSection";
 import { BackupSection } from "./BackupSection";
-import { DEFAULT_ATTACHMENT_WORDS, SYNC_CHOICES, loadSettings, saveSettings, useMailSettings, type MailSettings } from "../settings";
+import {
+  DEFAULT_ATTACHMENT_WORDS,
+  SYNC_CHOICES,
+  cleanSignatureHtml,
+  loadSettings,
+  saveSettings,
+  useMailSettings,
+  type MailSettings,
+} from "../settings";
+import { setHtml } from "../safe-html";
+import { FormatToolbar } from "./FormatToolbar";
 import type { ThemeMode } from "../theme";
 import type { Account, AccountConfig, AuthMethod, Security, ServerConfig, TestReport } from "../types";
 
@@ -206,7 +216,7 @@ function AttachmentWords({ value, onSave }: { value: string; onSave: (words: str
     >
       <Textarea
         value={text}
-        rows={3}
+        rows={2}
         resize="vertical"
         onChange={(_, d) => setText(d.value)}
         onBlur={() => text !== value && onSave(text)}
@@ -226,10 +236,16 @@ function MailSection({ accounts }: { accounts: Account[] }) {
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
   const [text, setText] = useState(settings.signatures[accountId] ?? "");
   const [saved, setSaved] = useState(true);
+  /** Éditeur de la signature mise en forme (lot T) : il gère son propre contenu. */
+  const htmlEditor = useRef<HTMLDivElement>(null);
+  /** Signature affichée dans la zone : en texte simple, sinon mise en forme. */
+  const [editingText, setEditingText] = useState(false);
 
-  // Changement de compte : sa signature s'affiche.
+  // Changement de compte : ses deux signatures s'affichent.
   useEffect(() => {
-    setText(loadSettings().signatures[accountId] ?? "");
+    const current = loadSettings();
+    setText(current.signatures[accountId] ?? "");
+    if (htmlEditor.current) setHtml(htmlEditor.current, current.htmlSignatures[accountId] ?? "");
     setSaved(true);
   }, [accountId]);
 
@@ -237,12 +253,19 @@ function MailSection({ accounts }: { accounts: Account[] }) {
 
   const saveSignature = () => {
     const current = loadSettings();
-    saveSettings({ ...current, signatures: { ...current.signatures, [accountId]: text } });
+    const html = cleanSignatureHtml(htmlEditor.current?.innerHTML ?? "");
+    if (htmlEditor.current) setHtml(htmlEditor.current, html);
+    saveSettings({
+      ...current,
+      signatures: { ...current.signatures, [accountId]: text },
+      htmlSignatures: { ...current.htmlSignatures, [accountId]: html },
+    });
     setSaved(true);
   };
+  const hasSignature = (settings.signatures[accountId] ?? "") !== "" || (settings.htmlSignatures[accountId] ?? "") !== "";
 
   return (
-    <div className="settings-pane">
+    <div className="settings-pane compact">
       <h3 className="settings-pane-title">{t("Courrier")}</h3>
       <div className="about-scroll">
         <fieldset className="account-fieldset">
@@ -266,18 +289,6 @@ function MailSection({ accounts }: { accounts: Account[] }) {
         </fieldset>
 
         <fieldset className="account-fieldset">
-          <legend>{t("Pièces jointes")}</legend>
-          <Checkbox
-            checked={settings.attachmentReminder}
-            onChange={(_, d) => update({ attachmentReminder: d.checked === true })}
-            label={t("Avertir à l'envoi si le message parle d'une pièce jointe absente")}
-          />
-          {settings.attachmentReminder && (
-            <AttachmentWords value={settings.attachmentWords} onSave={(w) => update({ attachmentWords: w })} />
-          )}
-        </fieldset>
-
-        <fieldset className="account-fieldset">
           <legend>{t("Signature")}</legend>
           {accounts.length === 0 ? (
             <p className="muted">{t("Ajoutez d'abord un compte.")}</p>
@@ -292,18 +303,44 @@ function MailSection({ accounts }: { accounts: Account[] }) {
                   ))}
                 </Select>
               </Field>
-              <Field label={t("Signature ajoutée aux nouveaux messages de ce compte")}>
-                <Textarea
-                  value={text}
-                  rows={6}
-                  resize="vertical"
-                  placeholder={t("Prénom Nom\n06 00 00 00 00")}
-                  onChange={(_, d) => {
-                    setText(d.value);
-                    setSaved(false);
-                  }}
+              {/* Deux signatures (lot T) : chacune pour les messages de son format ; l'autre sert à défaut. */}
+              {/* Une seule zone (lot T) : la bascule « Format » de la barre choisit laquelle des
+                  deux signatures on modifie ; l'autre reste en mémoire jusqu'à l'enregistrement. */}
+              <div className="signature-frame">
+                <FormatToolbar
+                  editor={htmlEditor}
+                  disabled={false}
+                  plain={editingText}
+                  onPlainChange={setEditingText}
                 />
-              </Field>
+                <div
+                  ref={htmlEditor}
+                  className="compose-editor signature-editor"
+                  hidden={editingText}
+                  contentEditable
+                  suppressContentEditableWarning
+                  role="textbox"
+                  aria-multiline="true"
+                  aria-label={t("Signature mise en forme (messages en HTML)")}
+                  data-placeholder={t("Prénom Nom, avec mise en forme, lien ou logo")}
+                  onInput={() => setSaved(false)}
+                />
+                {editingText && (
+                  <textarea
+                    className="signature-plain"
+                    aria-label={t("Signature en texte simple (messages en texte brut)")}
+                    value={text}
+                    placeholder={t("Prénom Nom\n06 00 00 00 00")}
+                    onChange={(e) => {
+                      setText(e.target.value);
+                      setSaved(false);
+                    }}
+                  />
+                )}
+              </div>
+              <p className="muted settings-hint">
+                {t("Chaque message reçoit la signature de son format ; si elle est vide, l'autre sert à sa place.")}
+              </p>
               <Checkbox
                 checked={settings.signatureOnReplies}
                 onChange={(_, d) => update({ signatureOnReplies: d.checked === true })}
@@ -313,11 +350,23 @@ function MailSection({ accounts }: { accounts: Account[] }) {
                 <Button appearance="primary" disabled={saved} onClick={saveSignature}>
                   {t("Enregistrer la signature")}
                 </Button>
-                {saved && (settings.signatures[accountId] ?? "") !== "" && <span className="muted">{t("Enregistrée")}</span>}
+                {saved && hasSignature && <span className="muted">{t("Enregistrée")}</span>}
               </div>
             </>
           )}
         </fieldset>
+        <fieldset className="account-fieldset">
+          <legend>{t("Pièces jointes")}</legend>
+          <Checkbox
+            checked={settings.attachmentReminder}
+            onChange={(_, d) => update({ attachmentReminder: d.checked === true })}
+            label={t("Avertir à l'envoi si le message parle d'une pièce jointe absente")}
+          />
+          {settings.attachmentReminder && (
+            <AttachmentWords value={settings.attachmentWords} onSave={(w) => update({ attachmentWords: w })} />
+          )}
+        </fieldset>
+
         <fieldset className="account-fieldset">
           <legend>{t("Certificats des correspondants (S/MIME)")}</legend>
           <CorrespondentsSection />

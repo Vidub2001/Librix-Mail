@@ -13,7 +13,7 @@ export function UpdateDialog(p: { found: NewVersion; onLater: () => void; onSkip
   }, []);
   return (
     <Dialog open onOpenChange={(_, d) => !d.open && p.onLater()}>
-      <DialogSurface className="small-dialog">
+      <DialogSurface className="small-dialog update-dialog">
         <DialogBody>
           <DialogTitle>{t("Nouvelle version disponible")}</DialogTitle>
           <DialogContent>
@@ -24,10 +24,13 @@ export function UpdateDialog(p: { found: NewVersion; onLater: () => void; onSkip
             </p>
             <p className="muted small">{t("Ces rappels peuvent être désactivés dans Paramètres › Général.")}</p>
           </DialogContent>
-          <DialogActions>
+          {/* Lot T : « Ignorer » à part, à gauche ; « Plus tard » et l'action principale à droite. */}
+          <DialogActions position="start">
             <Button appearance="subtle" onClick={p.onSkip}>
-              {t("Ne plus signaler cette version")}
+              {t("Ignorer cette version")}
             </Button>
+          </DialogActions>
+          <DialogActions position="end">
             <Button onClick={p.onLater}>{t("Plus tard")}</Button>
             <Button
               appearance="primary"
@@ -36,7 +39,7 @@ export function UpdateDialog(p: { found: NewVersion; onLater: () => void; onSkip
                 p.onLater();
               }}
             >
-              {t("Voir la nouvelle version")}
+              {t("Voir la version")}
             </Button>
           </DialogActions>
         </DialogBody>

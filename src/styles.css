@@ -2398,6 +2398,68 @@ body.resizing .splitter::after {
   max-width: 200px;
 }
 
+/* Signature (lot T) : une zone, la barre de mise en forme et sa bascule HTML / Texte dans
+   le même cadre. */
+.signature-frame {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 260px;
+  border: 1px solid var(--colorNeutralStroke1);
+  border-radius: var(--borderRadiusMedium);
+  background: var(--colorNeutralBackground1);
+  overflow: hidden;
+}
+
+.signature-frame:focus-within {
+  border-color: var(--colorBrandStroke1);
+}
+
+/* Barre de mise en forme de la signature : icônes seules, sur une ligne (libellés en infobulle). */
+.signature-frame .fmt-bar {
+  padding: 2px 4px;
+  border-top: none;
+}
+
+.signature-frame .fmt-btn > .fmt-label {
+  display: none;
+}
+
+.signature-frame .fmt-btn {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 4px;
+}
+
+.signature-editor {
+  flex: 1;
+  min-height: 0;
+  max-height: 360px;
+  padding: 6px 8px;
+}
+
+.signature-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--colorNeutralForeground4);
+}
+
+.signature-editor[hidden] {
+  display: none;
+}
+
+.signature-plain {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px;
+  border: none;
+  outline: none;
+  resize: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--colorNeutralForeground1);
+  background: transparent;
+}
+
 .mail-signature-actions {
   display: flex;
   align-items: center;
@@ -3930,6 +3992,53 @@ body.resizing-rows {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+/* Deux groupes de réglages côte à côte (lot T), l'un sous l'autre si la fenêtre est étroite :
+   même largeur par défaut, le second plus large pour le volet de lecture (lead). */
+.settings-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.settings-pair.lead {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+}
+
+/* Paramètres › Général et › Courrier plus compacts : sans défilement à la taille habituelle. */
+.settings-pane.compact {
+  gap: 10px;
+}
+
+.settings-pane.compact .about-scroll {
+  gap: 10px;
+}
+
+.settings-pane.compact .account-fieldset {
+  gap: 6px;
+  padding: 4px 12px 10px;
+}
+
+.settings-pane.compact .settings-hint {
+  margin-top: 2px;
+}
+
+@media (max-width: 900px) {
+  .settings-pair,
+  .settings-pair.lead {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Fenêtre « Nouvelle version disponible » (lot T) : boutons sur une ligne. */
+.update-dialog .fui-DialogActions {
+  flex-wrap: nowrap;
+}
+
+.update-dialog .fui-Button {
+  white-space: nowrap;
 }
 
 .settings-hint {

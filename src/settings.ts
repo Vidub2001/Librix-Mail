@@ -3,11 +3,14 @@
 // de message ou de rédaction reçoit les réglages à son ouverture
 // (`window_bootstrap`) et ne voit pas ceux changés ensuite.
 import { useEffect, useState } from "react";
+import { parseHtml } from "./safe-html";
 import { secureStore } from "./secure-store";
 
 export interface MailSettings {
-  /** Signature (texte) par compte. */
+  /** Signature en texte simple par compte (messages en texte brut). */
   signatures: Record<string, string>;
+  /** Signature mise en forme (HTML) par compte, pour les messages en HTML (lot T). */
+  htmlSignatures: Record<string, string>;
   /** Signature aussi dans les réponses et transferts. */
   signatureOnReplies: boolean;
   /** Fréquence de la synchronisation automatique, en minutes. */
@@ -30,6 +33,7 @@ export const DEFAULT_ATTACHMENT_WORDS =
 
 const DEFAULTS: MailSettings = {
   signatures: {},
+  htmlSignatures: {},
   signatureOnReplies: true,
   syncMinutes: 2,
   attachmentReminder: true,
@@ -70,10 +74,65 @@ export function useMailSettings(): MailSettings {
 
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** Contenu HTML de la signature d'un compte (vide s'il n'en a pas). */
+/** Texte simple → HTML, une ligne par ligne. */
+const textToSignatureHtml = (text: string) => text.split("\n").map((l) => escapeHtml(l) || "<br>").join("<br>");
+
+/** Éléments jamais gardés dans une signature mise en forme. */
+const DROPPED = "script, style, iframe, frame, object, embed, link, meta, base, form, input, button, textarea, select";
+
+/**
+ * Signature mise en forme nettoyée avant d'être enregistrée (lot T) : ni
+ * script, ni cadre, ni formulaire, ni attribut d'événement, ni adresse
+ * `javascript:` ; images intégrées (`data:`) seulement, une image distante
+ * signalerait au destinataire l'ouverture du message.
+ */
+export function cleanSignatureHtml(html: string): string {
+  const box = document.createElement("div");
+  box.append(parseHtml(html));
+  box.querySelectorAll(DROPPED).forEach((n) => n.remove());
+  box.querySelectorAll("*").forEach((el) => {
+    for (const { name, value } of [...el.attributes]) {
+      const lower = name.toLowerCase();
+      const url = value.trim().toLowerCase();
+      if (lower.startsWith("on") || ((lower === "href" || lower === "src") && url.startsWith("javascript:"))) el.removeAttribute(name);
+    }
+    if (el.tagName === "IMG" && !(el.getAttribute("src") ?? "").startsWith("data:")) el.remove();
+  });
+  const kept = Boolean(box.textContent?.trim()) || box.querySelector("img") !== null;
+  return kept ? box.innerHTML.trim() : "";
+}
+
+/** Signature mise en forme d'un compte, pour un message en HTML : sinon sa signature en texte simple. */
 export function signatureContent(accountId: string): string {
-  const text = (loadSettings().signatures[accountId] ?? "").trimEnd();
-  return text ? text.split("\n").map((l) => escapeHtml(l) || "<br>").join("<br>") : "";
+  const s = loadSettings();
+  const html = (s.htmlSignatures[accountId] ?? "").trim();
+  if (html) return html;
+  const text = (s.signatures[accountId] ?? "").trimEnd();
+  return text ? textToSignatureHtml(text) : "";
+}
+
+/** Signature en texte simple d'un compte, pour un message en texte brut : sinon le texte de sa signature mise en forme. */
+export function plainSignatureContent(accountId: string): string {
+  const s = loadSettings();
+  const text = (s.signatures[accountId] ?? "").trimEnd();
+  if (text) return textToSignatureHtml(text);
+  const html = (s.htmlSignatures[accountId] ?? "").trim();
+  if (!html) return "";
+  const box = document.createElement("div");
+  box.append(parseHtml(html));
+  box.querySelectorAll("br").forEach((br) => br.replaceWith("\n"));
+  box.querySelectorAll("p, div, li, tr").forEach((b) => b.append("\n"));
+  return textToSignatureHtml((box.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim());
+}
+
+/** Le HTML d'un nouveau message, avec la signature en texte simple à la place de la mise en forme. */
+export function withPlainSignature(html: string, accountId: string): string {
+  const box = document.createElement("div");
+  box.append(parseHtml(html));
+  const block = box.querySelector("[data-signature]");
+  if (!block) return html;
+  block.replaceChildren(parseHtml(plainSignatureContent(accountId)));
+  return box.innerHTML;
 }
 
 /** Bloc de signature à placer dans un nouveau message (repérable pour changer de compte). */

@@ -1,7 +1,7 @@
 // Maquette JS utilisée seulement hors de Tauri (aperçu navigateur).
 // Mêmes règles que le Rust : même compte = déplacement simple,
 // autre compte = copie avec nouvel identifiant puis suppression de la source.
-import type { Account, AccountConfig, AttachmentInput, CalEvent, Contact, Draft, DraftContent, PimCollection, Suggestion, Folder, FolderListing, FolderRole, Message, MessageSummary, MoveReport, RestoreReport, SavedDraft, TestReport, Detected } from "./types";
+import type { Account, AccountConfig, AttachmentInput, CalEvent, Contact, Draft, DraftContent, PimCollection, Suggestion, Folder, FolderListing, FolderRole, Message, MessageSummary, MoveReport, NewVersion, RestoreReport, SavedDraft, TestReport, Detected } from "./types";
 
 const now = Math.floor(Date.now() / 1000);
 const h = (hours: number) => now - hours * 3600;
@@ -368,6 +368,13 @@ export async function moveToRole(ids: number[], role: FolderRole): Promise<MoveR
     total.crossAccount += r.crossAccount;
   }
   return total;
+}
+
+/** Aperçu navigateur : une version plus récente seulement avec `?nouvelle-version` (lot T, parcours de la fenêtre). */
+export async function checkUpdate(): Promise<NewVersion | null> {
+  return new URLSearchParams(window.location.search).has("nouvelle-version")
+    ? { version: "9.9.9", url: "https://example.org/librixmail" }
+    : null;
 }
 
 export async function restoreMessages(ids: number[]): Promise<RestoreReport> {

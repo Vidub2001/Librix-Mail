@@ -48,8 +48,10 @@ interface Props {
   disabled: boolean;
   /** Message en texte brut : seuls le format et la pièce jointe restent. */
   plain: boolean;
-  onPlainChange: (plain: boolean) => void;
-  onAttach: () => void;
+  /** Bascule HTML ↔ texte ; sans elle (signature mise en forme, lot T), pas de bascule. */
+  onPlainChange?: (plain: boolean) => void;
+  /** Joindre des fichiers ; sans elle (signature, lot T), pas de bouton. */
+  onAttach?: () => void;
 }
 
 /**
@@ -200,11 +202,11 @@ export function FormatToolbar({ editor, disabled, plain, onPlainChange, onAttach
       onClick={onClick}
     >
       {icon}
-      <span>{label}</span>
+      <span className="fmt-label">{label}</span>
     </button>
   );
 
-  const formatSwitch = (
+  const formatSwitch = onPlainChange && (
     <div className="fmt-group fmt-format">
       <small>{t("Format")}</small>
       <div className="fmt-segmented" role="radiogroup" aria-label={t("Format du message")}>
@@ -222,7 +224,7 @@ export function FormatToolbar({ editor, disabled, plain, onPlainChange, onAttach
             className={plain === value ? "on" : ""}
             disabled={disabled}
             onMouseDown={keep}
-            onClick={() => onPlainChange(value)}
+            onClick={() => onPlainChange?.(value)}
             title={value ? t("Texte brut, sans mise en forme") : t("Texte mis en forme")}
           >
             {label}
@@ -235,7 +237,7 @@ export function FormatToolbar({ editor, disabled, plain, onPlainChange, onAttach
   if (plain) {
     return (
       <div className="fmt-bar" role="toolbar" aria-label={t("Mise en forme")}>
-        <div className="fmt-group">{tool("attach", <Attach20Regular />, t("Pièce jointe"), onAttach, t("Joindre des fichiers"))}</div>
+        {onAttach && <div className="fmt-group">{tool("attach", <Attach20Regular />, t("Pièce jointe"), onAttach, t("Joindre des fichiers"))}</div>}
         {formatSwitch}
       </div>
     );
@@ -362,7 +364,7 @@ export function FormatToolbar({ editor, disabled, plain, onPlainChange, onAttach
       </div>
 
       <div className="fmt-group">
-        {tool("attach", <Attach20Regular />, t("Pièce jointe"), onAttach, t("Joindre des fichiers"))}
+        {onAttach && tool("attach", <Attach20Regular />, t("Pièce jointe"), onAttach, t("Joindre des fichiers"))}
         {tool("quote", <TextQuote20Regular />, t("Citation"), toggleQuote)}
         {tool("clear", <TextClearFormatting20Regular />, t("Effacer"), clearFormatting, t("Effacer la mise en forme"))}
       </div>

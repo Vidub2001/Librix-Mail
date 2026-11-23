@@ -247,6 +247,72 @@ test("E6 : paramètres et licences chargés à la demande", async ({ page }) => 
   await expect(page.getByRole("dialog", { name: "Paramètres" })).toBeVisible();
 });
 
+test("T : Paramètres › Général, réglages courts côte à côte", async ({ page }) => {
+  await page.getByRole("button", { name: "Comptes et paramètres" }).click();
+  const settings = page.getByRole("dialog", { name: "Paramètres" });
+  await settings.getByRole("button", { name: "Général" }).click();
+  const top = async (name: string) => (await settings.locator("legend", { hasText: name }).boundingBox())?.y ?? -1;
+  const left = async (name: string) => (await settings.locator("legend", { hasText: name }).boundingBox())?.x ?? -1;
+  await expect(settings.locator("legend", { hasText: "Volet de lecture" })).toBeVisible();
+  const pairs = [
+    ["Apparence", "Volet de lecture"],
+    ["Rédaction", "Contacts"],
+  ];
+  for (const [a, b] of pairs) {
+    expect(Math.abs((await top(a)) - (await top(b))), `${a} et ${b} sur la même ligne`).toBeLessThan(4);
+    expect(await left(b), `${b} à droite de ${a}`).toBeGreaterThan(await left(a));
+  }
+  // Rédaction et Contacts de même largeur.
+  const width = async (name: string) =>
+    (await settings.locator("fieldset", { has: page.locator("legend", { hasText: name }) }).boundingBox())?.width ?? -1;
+  expect(Math.abs((await width("Rédaction")) - (await width("Contacts"))), "même largeur").toBeLessThan(2);
+  // Langue, Date et heure, Arrière-plan et Mises à jour restent seuls sur leur ligne.
+  expect(await top("Date et heure")).toBeGreaterThan(await top("Langue"));
+  expect(await top("Mises à jour")).toBeGreaterThan(await top("Arrière-plan"));
+});
+
+test("T : « Nouvelle version disponible », trois boutons sur une ligne", async ({ page }) => {
+  await page.clock.install();
+  await page.goto("/?nouvelle-version");
+  // Application affichée : le premier essai est programmé, une minute après.
+  await expect(page.getByRole("button", { name: "Nouveau courrier" })).toBeVisible();
+  await page.clock.fastForward(61_000);
+  const dialog = page.getByRole("dialog", { name: "Nouvelle version disponible" });
+  await expect(dialog).toBeVisible();
+  const boxes = await Promise.all(
+    ["Ignorer cette version", "Plus tard", "Voir la version"].map((name) => dialog.getByRole("button", { name }).boundingBox()),
+  );
+  const tops = boxes.map((b) => b?.y ?? -1);
+  const heights = boxes.map((b) => b?.height ?? 999);
+  expect(Math.max(...tops) - Math.min(...tops), `boutons sur une ligne : ${tops}`).toBeLessThan(4);
+  expect(Math.max(...heights), `libellés sur une ligne : ${heights}`).toBeLessThan(40);
+  await dialog.getByRole("button", { name: "Plus tard" }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
+test("T : signatures mise en forme et en texte simple, chacune dans son format", async ({ page, context }) => {
+  await page.getByRole("button", { name: "Comptes et paramètres" }).click();
+  const settings = page.getByRole("dialog", { name: "Paramètres" });
+  await settings.getByRole("button", { name: "Courrier" }).click();
+  await settings.getByRole("textbox", { name: "Signature mise en forme (messages en HTML)" }).click();
+  await page.keyboard.type("Camille, signature mise en forme");
+  // Une seule zone : la bascule « Texte » montre la signature en texte simple.
+  await settings.getByRole("radio", { name: "Texte" }).click();
+  await settings.getByLabel("Signature en texte simple (messages en texte brut)").fill("Camille, signature texte");
+  await settings.getByRole("radio", { name: "HTML" }).click();
+  await expect(settings.getByRole("textbox", { name: "Signature mise en forme (messages en HTML)" })).toContainText("Camille, signature mise en forme");
+  await settings.getByRole("button", { name: "Enregistrer la signature" }).click();
+  await expect(settings.getByText("Enregistrée")).toBeVisible();
+  await settings.getByRole("button", { name: "Fermer" }).click();
+
+  const compose = await newMail(context, page);
+  const body = compose.getByLabel("Corps du message");
+  await expect(body).toContainText("Camille, signature mise en forme");
+  await compose.getByRole("radio", { name: "Texte" }).click();
+  await expect(body).toContainText("Camille, signature texte");
+  await expect(body).not.toContainText("mise en forme");
+});
+
 /** Ouvre l'assistant d'ajout de compte (lot I2) et cherche les réglages de l'adresse. */
 async function wizard(page: Page, email: string) {
   await page.getByRole("button", { name: "Comptes et paramètres" }).click();

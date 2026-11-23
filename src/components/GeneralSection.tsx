@@ -67,7 +67,7 @@ const LAYOUTS: { value: Layout; label: string }[] = [
 export function GeneralSection({ themeMode, onThemeMode }: Props) {
   const g = useGeneral();
   return (
-    <div className="settings-pane">
+    <div className="settings-pane compact">
       <h3 className="settings-pane-title">{t("Général")}</h3>
 
       <fieldset className="account-fieldset">
@@ -90,36 +90,38 @@ export function GeneralSection({ themeMode, onThemeMode }: Props) {
         </Field>
       </fieldset>
 
-      <fieldset className="account-fieldset">
-        <legend>{t("Apparence")}</legend>
-        <RadioGroup value={themeMode} onChange={(_, d) => onThemeMode(d.value as ThemeMode)}>
-          <Radio value="system" label={t("Comme le système")} />
-          <Radio value="light" label={t("Clair")} />
-          <Radio value="dark" label={t("Sombre")} />
-        </RadioGroup>
-      </fieldset>
-
-      <fieldset className="account-fieldset">
-        <legend>{t("Volet de lecture")}</legend>
-        <div className="layout-choices" role="radiogroup" aria-label={t("Volet de lecture")}>
-          {LAYOUTS.map((l) => (
-            <button
-              key={l.value}
-              type="button"
-              role="radio"
-              aria-checked={g.layout === l.value}
-              className={g.layout === l.value ? "layout-choice on" : "layout-choice"}
-              onClick={() => saveGeneral({ layout: l.value })}
-            >
-              <LayoutPicture layout={l.value} />
-              <span>{l.label}</span>
-            </button>
-          ))}
-        </div>
-        {g.layout === "hidden" && (
-          <p className="muted settings-hint">{t("Double-cliquez sur un message pour l'ouvrir dans une fenêtre.")}</p>
-        )}
-      </fieldset>
+      {/* Deux groupes côte à côte (lot T), pour gagner de la hauteur. */}
+      <div className="settings-pair lead">
+        <fieldset className="account-fieldset">
+          <legend>{t("Apparence")}</legend>
+          <RadioGroup value={themeMode} onChange={(_, d) => onThemeMode(d.value as ThemeMode)}>
+            <Radio value="system" label={t("Comme le système")} />
+            <Radio value="light" label={t("Clair")} />
+            <Radio value="dark" label={t("Sombre")} />
+          </RadioGroup>
+        </fieldset>
+        <fieldset className="account-fieldset">
+          <legend>{t("Volet de lecture")}</legend>
+          <div className="layout-choices" role="radiogroup" aria-label={t("Volet de lecture")}>
+            {LAYOUTS.map((l) => (
+              <button
+                key={l.value}
+                type="button"
+                role="radio"
+                aria-checked={g.layout === l.value}
+                className={g.layout === l.value ? "layout-choice on" : "layout-choice"}
+                onClick={() => saveGeneral({ layout: l.value })}
+              >
+                <LayoutPicture layout={l.value} />
+                <span>{l.label}</span>
+              </button>
+            ))}
+          </div>
+          {g.layout === "hidden" && (
+            <p className="muted settings-hint">{t("Double-cliquez sur un message pour l'ouvrir dans une fenêtre.")}</p>
+          )}
+        </fieldset>
+      </div>
 
       <fieldset className="account-fieldset">
         <legend>{t("Date et heure")}</legend>
@@ -145,17 +147,27 @@ export function GeneralSection({ themeMode, onThemeMode }: Props) {
         </div>
       </fieldset>
 
-      <fieldset className="account-fieldset">
-        <legend>{t("Rédaction")}</legend>
-        <RadioGroup
-          value={g.composeFormat}
-          onChange={(_, d) => saveGeneral({ composeFormat: d.value as "html" | "text" })}
-        >
-          <Radio value="html" label={t("HTML (mise en forme) par défaut")} />
-          <Radio value="text" label={t("Texte simple par défaut (sans barre de mise en forme)")} />
-        </RadioGroup>
-        <p className="muted settings-hint">{t("Le format peut toujours être changé dans chaque message.")}</p>
-      </fieldset>
+      <div className="settings-pair">
+        <fieldset className="account-fieldset">
+          <legend>{t("Rédaction")}</legend>
+          <RadioGroup
+            value={g.composeFormat}
+            onChange={(_, d) => saveGeneral({ composeFormat: d.value as "html" | "text" })}
+          >
+            <Radio value="html" label={t("HTML (mise en forme) par défaut")} />
+            <Radio value="text" label={t("Texte simple par défaut (sans barre de mise en forme)")} />
+          </RadioGroup>
+          <p className="muted settings-hint">{t("Le format peut toujours être changé dans chaque message.")}</p>
+        </fieldset>
+        <fieldset className="account-fieldset">
+          <legend>{t("Contacts")}</legend>
+          <RadioGroup value={g.nameOrder} onChange={(_, d) => saveGeneral({ nameOrder: d.value as NameOrder })}>
+            <Radio value="first-last" label={t("Prénom Nom (Marie Dupont)")} />
+            <Radio value="last-first" label={t("Nom Prénom (Dupont Marie)")} />
+          </RadioGroup>
+          <p className="muted settings-hint">{t("Pour l'affichage et le tri de la liste des contacts.")}</p>
+        </fieldset>
+      </div>
 
       <fieldset className="account-fieldset">
         <legend>{t("Arrière-plan")}</legend>
@@ -179,15 +191,6 @@ export function GeneralSection({ themeMode, onThemeMode }: Props) {
         <p className="muted settings-hint">
           {t("Une fois par jour, Librix Mail demande à GitHub le numéro de la dernière version ; GitHub voit alors votre adresse IP. Rien n'est téléchargé ni installé sans vous.")}
         </p>
-      </fieldset>
-
-      <fieldset className="account-fieldset">
-        <legend>{t("Contacts")}</legend>
-        <RadioGroup value={g.nameOrder} onChange={(_, d) => saveGeneral({ nameOrder: d.value as NameOrder })}>
-          <Radio value="first-last" label={t("Prénom Nom (Marie Dupont)")} />
-          <Radio value="last-first" label={t("Nom Prénom (Dupont Marie)")} />
-        </RadioGroup>
-        <p className="muted settings-hint">{t("Pour l'affichage et le tri de la liste des contacts.")}</p>
       </fieldset>
     </div>
   );

@@ -52,7 +52,7 @@ Las versiones se compilan a partir de este repositorio con GitHub Actions. Cada 
 
 Los archivos de Windows aún no están firmados: Windows puede mostrar un aviso en la primera instalación.
 
-> **Estado:** versión 0.3.8, usada a diario por su autor. Se agradecen los comentarios y los avisos de errores.
+> **Estado:** versión 0.3.9, usada a diario por su autor. Se agradecen los comentarios y los avisos de errores.
 
 ## Funciones
 
@@ -76,7 +76,7 @@ Los archivos de Windows aún no están firmados: Windows puede mostrar un aviso 
 - Mensajes cifrados con S/MIME: leídos con ese mismo certificado, descifrados en memoria (nada
   sin cifrar en el disco); enviados cifrados con el botón «Cifrar», gracias a los certificados de
   los corresponsales guardados de sus mensajes firmados.
-- Redacción: HTML o texto sin formato (formato predeterminado configurable), firmas por cuenta,
+- Redacción: HTML o texto sin formato (formato predeterminado configurable), firmas por cuenta (con formato y en texto simple),
   responder y reenviar, adjuntos con arrastrar y soltar, borradores guardados automáticamente,
   sugerencias de destinatarios, **aviso de adjunto olvidado**.
 - Mover y eliminar entre cuentas, con diario: un movimiento interrumpido (corte de red, aplicación

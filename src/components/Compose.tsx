@@ -36,7 +36,7 @@ import { setHtml } from "../safe-html";
 import { AddressInput } from "./AddressInput";
 import { notifyMain, onCloseRequested } from "../windows";
 import { clearBackup, writeBackup } from "../drafts";
-import { attachmentMention, loadSettings, ownText, signatureContent } from "../settings";
+import { attachmentMention, loadSettings, ownText, plainSignatureContent, signatureContent, withPlainSignature } from "../settings";
 
 /** Limite d'envoi, identique à celle du backend. */
 const MAX_TOTAL = 25 * 1024 * 1024;
@@ -221,7 +221,8 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
   // Contenu initial posé une seule fois : l'éditeur gère ensuite son propre DOM.
   useEffect(() => {
     if (editor.current) {
-      if (plain) editor.current.innerText = htmlToPlain(init.html);
+      // En texte brut, la signature en texte simple du compte (lot T).
+      if (plain) editor.current.innerText = htmlToPlain(withPlainSignature(init.html, accountId));
       else setHtml(editor.current, init.html);
     }
     if (init.mode === "new" || init.mode === "forward") toInput.current?.focus();
@@ -245,6 +246,9 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
     const el = editor.current;
     if (toPlain === plain || !el) return;
     if (toPlain) {
+      // Signature mise en forme remplacée par celle en texte simple (lot T).
+      const block = el.querySelector("[data-signature]");
+      if (block) setHtml(block, plainSignatureContent(accountId));
       prefixQuotes(el);
       // Relu puis réécrit en texte : le HTML (mise en forme, citations déjà
       // préfixées de « > ») devient du texte brut.

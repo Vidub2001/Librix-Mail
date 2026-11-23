@@ -52,7 +52,7 @@ Releases are built from this repository by GitHub Actions. Each one comes with `
 
 Windows files are not signed yet, so Windows may show a warning on first install.
 
-> **Status:** version 0.3.8, used every day by its author. Feedback and bug reports are welcome.
+> **Status:** version 0.3.9, used every day by its author. Feedback and bug reports are welcome.
 
 ## Features
 
@@ -76,7 +76,7 @@ Windows files are not signed yet, so Windows may show a warning on first install
 - S/MIME-encrypted messages: read with the same certificate, decrypted in memory (nothing in
   plain text on disk); sent encrypted with the “Encrypt” button, using the correspondents'
   certificates kept from their signed messages.
-- Writing: HTML or plain text (default format configurable), per-account signatures, reply and
+- Writing: HTML or plain text (default format configurable), per-account signatures (formatted and plain text), reply and
   forward, drag-and-drop attachments, automatic draft saving, recipient suggestions,
   **forgotten-attachment warning**.
 - Moving and deleting across accounts, with a journal: an interrupted move (network loss, app

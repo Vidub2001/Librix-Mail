@@ -410,7 +410,7 @@ export const api = {
   prefsGet: (): Promise<[string, string][]> => (inTauri ? invoke("prefs_get") : Promise.resolve([])),
   prefsSet: (key: string, value: string | null): Promise<void> => (inTauri ? invoke("prefs_set", { key, value }) : Promise.resolve()),
   /** Nouvelle version publiée sur GitHub (lot K1) ; null : à jour. */
-  checkUpdate: (): Promise<NewVersion | null> => (inTauri ? invoke("check_update") : Promise.resolve(null)),
+  checkUpdate: (): Promise<NewVersion | null> => (inTauri ? invoke("check_update") : mock.checkUpdate()),
   openUrl: (url: string): Promise<void> =>
     inTauri ? invoke("open_url", { url }) : Promise.resolve(void window.open(url, "_blank", "noopener")),
 
