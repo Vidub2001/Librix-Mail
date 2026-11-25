@@ -1,7 +1,7 @@
 // Maquette JS utilisée seulement hors de Tauri (aperçu navigateur).
 // Mêmes règles que le Rust : même compte = déplacement simple,
 // autre compte = copie avec nouvel identifiant puis suppression de la source.
-import type { Account, AccountConfig, AttachmentInput, CalEvent, Contact, Draft, DraftContent, PimCollection, Suggestion, Folder, FolderListing, FolderRole, Message, MessageSummary, MoveReport, NewVersion, RestoreReport, SavedDraft, TestReport, Detected } from "./types";
+import type { Account, AccountConfig, AttachmentInput, ReturnedMessage, ScheduledItem, FolderConversations, CalEvent, Contact, Draft, DraftContent, PimCollection, Suggestion, Folder, FolderListing, FolderRole, Message, MessageSummary, MoveReport, NewVersion, RestoreReport, SavedDraft, TestReport, Detected } from "./types";
 
 const now = Math.floor(Date.now() / 1000);
 const h = (hours: number) => now - hours * 3600;
@@ -109,6 +109,8 @@ messages.get(nextId - 1)!.senderCheck = "dmarc";
 // Message envoyé : son destinataire est proposé à la complétion (lot J13).
 add("pro:Sent", "Moi", "moi@pro.example.com", "Compte rendu de la réunion", "<p>Voici le compte rendu.</p>", h(72), true);
 messages.get(nextId - 1)!.toList = ["jules.bernard@partenaire.example.org"];
+// Réponse envoyée à un message reçu : une conversation de deux messages (lot U2).
+add("pro:Sent", "Moi", "moi@pro.example.com", "RE: Devis pour l'audit d'architecture", "<p>Merci, je regarde le cahier des charges.</p>", h(1), true);
 
 function summary(m: Message): MessageSummary {
   const { to, bodyHtml, ...s } = m;
@@ -251,10 +253,29 @@ export async function sendMessage(
   answeredId: number | null,
   attachments: AttachmentInput[],
   draftId: number | null,
+  delay = 0,
 ): Promise<void> {
   const recipients = [...draft.to, ...draft.cc, ...draft.bcc];
   if (recipients.length === 0) throw "Ajoutez au moins un destinataire.";
-  announce({ type: "sending", accountId });
+  const sendKey = draft.sendKey ?? "";
+  // Délai d'annulation (lot W1) : comme le backend, le message attend, annulable.
+  // Dans l'aperçu, la rédaction attend la fin du délai avant de se fermer :
+  // l'annulation lui arrive de la fenêtre principale par un canal à part.
+  if (delay > 0 && sendKey && typeof BroadcastChannel !== "undefined") {
+    announce({ type: "sending", accountId, held: { sendKey, delay } });
+    const cancels = new BroadcastChannel(HELD_CHANNEL);
+    const cancelled = await new Promise<boolean>((resolve) => {
+      cancels.onmessage = (e: MessageEvent<string>) => e.data === sendKey && resolve(true);
+      setTimeout(() => resolve(false), delay * 1000);
+    });
+    cancels.close();
+    if (cancelled) {
+      announce({ type: "sendCancelled", accountId, draft, attachments, answeredId, draftId, window: "demo" });
+      return;
+    }
+  } else {
+    announce({ type: "sending", accountId });
+  }
   const refused = recipients.find((a) => a.toLowerCase().startsWith("echec@"));
   if (refused) {
     announce({
@@ -266,6 +287,62 @@ export async function sendMessage(
   announce({
     type: "sent", report: { recipients: recipients.length, savedIn: roleNames.sent, warning: null }, accountId, answeredId,
   });
+}
+
+/** Messages programmés de la maquette (lot W2), gardés dans le stockage partagé par les fenêtres. */
+const SCHEDULED = "librix.demo.programmes";
+type DemoScheduled = { id: number; sendAt: number; message: ReturnedMessage };
+const readScheduled = (): DemoScheduled[] => JSON.parse(localStorage.getItem(SCHEDULED) ?? "[]") as DemoScheduled[];
+const writeScheduled = (list: DemoScheduled[], sendAt: number | null = null) => {
+  localStorage.setItem(SCHEDULED, JSON.stringify(list));
+  announce({ type: "scheduled", sendAt });
+};
+
+export async function scheduleSend(
+  accountId: string,
+  draft: Draft,
+  answeredId: number | null,
+  attachments: AttachmentInput[],
+  sendAt: number,
+): Promise<number> {
+  if (draft.encrypt) throw "Un message à chiffrer ne peut pas être programmé : envoyez-le maintenant.";
+  const list = readScheduled();
+  const id = Math.max(0, ...list.map((s) => s.id)) + 1;
+  writeScheduled([...list, { id, sendAt, message: { accountId, draft, attachments, answeredId, draftId: null, window: "" } }], sendAt);
+  return id;
+}
+
+export async function scheduledList(): Promise<ScheduledItem[]> {
+  return readScheduled()
+    .sort((a, b) => a.sendAt - b.sendAt)
+    .map((s) => ({ id: s.id, accountId: s.message.accountId, sendAt: s.sendAt, subject: s.message.draft.subject, to: s.message.draft.to }));
+}
+
+export async function unschedule(id: number): Promise<ReturnedMessage | null> {
+  const list = readScheduled();
+  const found = list.find((s) => s.id === id);
+  writeScheduled(list.filter((s) => s.id !== id));
+  return found?.message ?? null;
+}
+
+/** Envoi immédiat d'un message programmé de la maquette : annoncé comme un envoi ordinaire. */
+export async function sendScheduledNow(id: number): Promise<boolean> {
+  const message = await unschedule(id);
+  if (!message) return false;
+  await sendMessage(message.accountId, message.draft, message.answeredId, message.attachments, null);
+  return true;
+}
+
+/** Canal des annulations d'envoi de la maquette (lot W1), à part de celui des événements. */
+const HELD_CHANNEL = "librix-demo-held";
+
+/** Annule un envoi retenu de la maquette (sans effet s'il est déjà parti). */
+export async function cancelSend(sendKey: string): Promise<boolean> {
+  if (typeof BroadcastChannel === "undefined") return false;
+  const channel = new BroadcastChannel(HELD_CHANNEL);
+  channel.postMessage(sendKey);
+  channel.close();
+  return true;
 }
 
 // ---------------------------------------------------------------- brouillons et recherche
@@ -484,4 +561,26 @@ export async function suggest(query: string): Promise<Suggestion[]> {
 
 export async function forgetAddress(email: string): Promise<void> {
   forgotten.add(email.trim().toLowerCase());
+}
+
+/** Conversations (lot U2), approchées par l'objet sans « Re: » ni « TR: » : le vrai calcul est dans le backend. */
+export function folderConversations(folderId: string): Promise<FolderConversations> {
+  const base = (s: string) => s.replace(/^(\s*(re|fwd?|tr)\s*:\s*)+/i, "").trim().toLowerCase();
+  const accountId = folderId.split(":")[0];
+  const sentId = folders.find((f) => f.accountId === accountId && f.role === "sent")?.id;
+  const keys = new Map<string, number>();
+  const conversation: Record<string, number> = {};
+  const inFolder = [...messages.values()].filter((m) => m.folderId === folderId);
+  for (const m of inFolder) {
+    const k = base(m.subject);
+    if (!keys.has(k)) keys.set(k, keys.size);
+    conversation[String(m.id)] = keys.get(k)!;
+  }
+  const sent =
+    sentId && sentId !== folderId
+      ? [...messages.values()]
+          .filter((m) => m.folderId === sentId && keys.has(base(m.subject)))
+          .map((m) => ({ conversation: keys.get(base(m.subject))!, message: summary(m) }))
+      : [];
+  return delay({ conversation, sent });
 }

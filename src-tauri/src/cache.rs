@@ -7,14 +7,17 @@
 //! l'interface (`MessageId` ⇄ compte/dossier/UID), pour que les lectures du
 //! cache n'aient jamais besoin du verrou des connexions réseau.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use mail_core::search::SearchQuery;
 use mail_core::{Account, AttachmentInfo, Flags, Folder, FolderRole, Message, MessageId, MessageSummary};
 use rusqlite::{params, Connection, OptionalExtension};
+
+use crate::threads::{ThreadHeaders, ThreadMessage};
 
 /// Les identifiants de messages commencent ici (au-delà de ceux de la démo).
 const ID_BASE: MessageId = 1 << 40;
@@ -62,6 +65,10 @@ CREATE TABLE IF NOT EXISTS messages (
     flagged     INTEGER NOT NULL,
     answered    INTEGER NOT NULL,
     attachments INTEGER NOT NULL,
+    -- En-têtes de discussion (lot U1) ; NULL : pas encore lus sur le serveur.
+    message_id  TEXT,
+    parents     TEXT,
+    recipients  TEXT,
     PRIMARY KEY (account, path, uid)
 );
 CREATE INDEX IF NOT EXISTS messages_by_date ON messages (account, path, date DESC);
@@ -197,6 +204,16 @@ CREATE TABLE IF NOT EXISTS accounts (
     color    TEXT    NOT NULL,
     position INTEGER NOT NULL
 );
+
+-- Messages programmés (lot W2), envoyés par Librix Mail à l'heure choisie :
+-- `send_at` en secondes Unix ; `data`, le message en JSON (brouillon et
+-- pièces jointes), dans le cache chiffré, jamais ailleurs.
+CREATE TABLE IF NOT EXISTS scheduled_sends (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    account TEXT    NOT NULL,
+    send_at INTEGER NOT NULL,
+    data    TEXT    NOT NULL
+);
 ";
 
 /// Déplacement inter-comptes enregistré au journal.
@@ -207,6 +224,17 @@ pub struct JournalRow {
     pub target: String,
     pub message_id: Option<String>,
     pub copied: bool,
+}
+
+/// Message programmé (lot W2), tel que gardé dans le cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledRow {
+    pub id: i64,
+    pub account: String,
+    /// Heure d'envoi, en secondes Unix.
+    pub send_at: i64,
+    /// Le message en JSON (`windows::Returned`).
+    pub data: String,
 }
 
 /// Copie d'un message envoyé, à déposer dans « Éléments envoyés » au retour du
@@ -324,9 +352,28 @@ pub struct Header {
     pub date: i64,
     pub flags: Flags,
     pub has_attachments: bool,
+    /// En-têtes de discussion (lot U1) ; `None` : pas lus, relus plus tard
+    /// (`missing_thread_headers`), et ceux déjà en cache sont gardés.
+    pub thread: Option<ThreadHeaders>,
 }
 
 type Res<T> = Result<T, String>;
+
+/// SQLite et `SQLCipher` initialisés une fois, avant toute autre connexion.
+/// Deux connexions ouvertes en même temps au tout début (tests en parallèle,
+/// ou démarrage) pouvaient voir `SQLCipher` pas encore prêt : « sqlcipher not
+/// initialized », puis `PRAGMA key` refusé (échec intermittent de
+/// `g4_cache_chiffre` sur Jenkins, 24 novembre 2026). La première ouverture
+/// se fait seule, sur une connexion jetable ; les autres l'attendent.
+fn sqlcipher_ready() {
+    static READY: std::sync::Once = std::sync::Once::new();
+    READY.call_once(|| {
+        if let Ok(conn) = Connection::open_in_memory() {
+            // Sans effet ; force SQLCipher à finir de s'initialiser ici.
+            let _ = conn.query_row("PRAGMA cipher_version", params![], |r| r.get::<_, String>(0));
+        }
+    });
+}
 
 #[expect(clippy::needless_pass_by_value, reason = "utilisée avec map_err, qui passe l'erreur par valeur")]
 fn sql(e: rusqlite::Error) -> String {
@@ -422,6 +469,7 @@ fn encrypt_plain(path: &Path, key: &CacheKey) -> Res<()> {
     let target = sibling(path, "-chiffrement");
     remove_if_present(&target)?;
     {
+        sqlcipher_ready();
         let plain = Connection::open(path).map_err(sql)?;
         let version: i64 = plain.query_row("PRAGMA user_version", params![], |r| r.get(0)).map_err(sql)?;
         let name = target.to_str().ok_or_else(|| tr!("chiffrement du cache local : {e}", e = target.display()))?;
@@ -543,6 +591,20 @@ pub struct Cache {
     reverse: HashMap<ImapRef, MessageId>,
     next_id: MessageId,
     revisions: Revisions,
+    /// Conversations calculées par compte (lot U1), gardées tant que le compte n'a pas changé.
+    conversations: HashMap<String, KeptConversations>,
+}
+
+/// Conversation de chaque message d'un compte (lot U1) : (dossier, UID, numéro de conversation).
+pub(crate) type Conversations = Arc<[(String, u32, usize)]>;
+
+/// Conversations d'un compte gardées en mémoire, avec ce dont elles dépendent.
+struct KeptConversations {
+    /// Version du compte au moment du calcul (`Revisions::of_account`).
+    revision: u64,
+    /// Adresses de l'utilisateur, triées.
+    own: Vec<String>,
+    found: Conversations,
 }
 
 /// Version de la liste de chaque dossier (audit P1) : augmentée à chaque
@@ -594,6 +656,11 @@ impl Revisions {
     fn of(&self, account: &str, path: &str) -> u64 {
         let folder = self.folders.get(&(account.to_string(), path.to_string())).copied().unwrap_or(0);
         folder.max(self.all)
+    }
+
+    /// Version de tout un compte : la plus récente de ses dossiers (lot U1).
+    fn of_account(&self, account: &str) -> u64 {
+        self.folders.iter().filter(|((a, _), _)| a == account).map(|(_, v)| *v).max().unwrap_or(0).max(self.all)
     }
 }
 
@@ -748,6 +815,7 @@ impl Cache {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| tr!("création de {path} impossible : {e}", path = dir.display(), e = e))?;
         }
+        sqlcipher_ready();
         Self::init(Connection::open(path).map_err(sql)?)
     }
 
@@ -765,6 +833,7 @@ impl Cache {
         if is_plain(path) {
             encrypt_plain(path, key).map_err(OpenError::Failed)?;
         }
+        sqlcipher_ready();
         let conn = Connection::open(path).map_err(|e| OpenError::Failed(sql(e)))?;
         // La clé avant toute autre instruction ; fichiers temporaires en mémoire,
         // jamais en clair sur le disque.
@@ -780,6 +849,7 @@ impl Cache {
 
     /// Cache éphémère (tests, ou repli si le fichier est inutilisable).
     pub fn in_memory() -> Res<Self> {
+        sqlcipher_ready();
         Self::init(Connection::open_in_memory().map_err(sql)?)
     }
 
@@ -813,6 +883,17 @@ impl Cache {
         }
         if !body_columns.iter().any(|c| c == "ciphertext") {
             conn.execute_batch("ALTER TABLE bodies ADD COLUMN ciphertext BLOB").map_err(sql)?;
+        }
+        // Lot U1 : en-têtes de discussion, NULL sur une base ancienne (relus en arrière-plan).
+        let message_columns: Vec<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(messages)").map_err(sql)?;
+            let rows = stmt.query_map(params![], |r| r.get::<_, String>(1)).map_err(sql)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(sql)?
+        };
+        for column in ["message_id", "parents", "recipients"] {
+            if !message_columns.iter().any(|c| c == column) {
+                conn.execute_batch(&format!("ALTER TABLE messages ADD COLUMN {column} TEXT")).map_err(sql)?;
+            }
         }
         if !folder_columns.iter().any(|c| c == "subscribed") {
             conn.execute_batch("ALTER TABLE folders ADD COLUMN subscribed INTEGER NOT NULL DEFAULT 1").map_err(sql)?;
@@ -856,7 +937,14 @@ impl Cache {
             repair_mime_previews(&conn)?;
             conn.execute_batch("PRAGMA user_version = 5;").map_err(sql)?;
         }
-        Ok(Self { conn, ids: HashMap::new(), reverse: HashMap::new(), next_id: ID_BASE, revisions: Revisions::starting_now() })
+        Ok(Self {
+            conn,
+            ids: HashMap::new(),
+            reverse: HashMap::new(),
+            next_id: ID_BASE,
+            revisions: Revisions::starting_now(),
+            conversations: HashMap::new(),
+        })
     }
 
     // ------------------------------------------------------------ identifiants
@@ -935,6 +1023,7 @@ impl Cache {
             "pending_sent",
             "trash_origins",
             "collected_addresses",
+            "scheduled_sends",
         ] {
             tx.execute(&format!("DELETE FROM {table} WHERE account = ?1"), params![account]).map_err(sql)?;
         }
@@ -1211,10 +1300,19 @@ impl Cache {
             // Requête préparée une fois pour toute la tranche (audit P7).
             let mut insert = tx
                 .prepare_cached(
-                    "INSERT OR REPLACE INTO messages
+                    // Lot U1 : en-têtes de discussion inconnus (NULL) : ceux déjà en cache restent.
+                    "INSERT INTO messages
                        (account, path, uid, from_name, from_email, subject, preview, date,
-                        seen, flagged, answered, attachments)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                        seen, flagged, answered, attachments, message_id, parents, recipients)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                     ON CONFLICT (account, path, uid) DO UPDATE SET
+                       from_name = excluded.from_name, from_email = excluded.from_email,
+                       subject = excluded.subject, preview = excluded.preview, date = excluded.date,
+                       seen = excluded.seen, flagged = excluded.flagged, answered = excluded.answered,
+                       attachments = excluded.attachments,
+                       message_id = COALESCE(excluded.message_id, messages.message_id),
+                       parents = COALESCE(excluded.parents, messages.parents),
+                       recipients = COALESCE(excluded.recipients, messages.recipients)",
                 )
                 .map_err(sql)?;
             for h in headers {
@@ -1231,12 +1329,89 @@ impl Cache {
                         h.flags.seen,
                         h.flags.flagged,
                         h.flags.answered,
-                        h.has_attachments
+                        h.has_attachments,
+                        h.thread.as_ref().map(|t| t.message_id.as_str()),
+                        h.thread.as_ref().map(|t| t.parents.join(" ")),
+                        h.thread.as_ref().map(|t| t.recipients.join(" "))
                     ])
                     .map_err(sql)?;
             }
         }
         tx.commit().map_err(sql)
+    }
+
+    /// Messages d'un dossier dont les en-têtes de discussion n'ont pas encore
+    /// été lus (lot U1), les plus récents d'abord, au plus `limit`.
+    pub fn missing_thread_headers(&self, account: &str, path: &str, limit: usize) -> Res<Vec<u32>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT uid FROM messages WHERE account = ?1 AND path = ?2 AND message_id IS NULL ORDER BY uid DESC LIMIT ?3")
+            .map_err(sql)?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = stmt.query_map(params![account, path, limit], |r| r.get::<_, u32>(0)).map_err(sql)?;
+        rows.collect::<Result<Vec<u32>, _>>().map_err(sql)
+    }
+
+    /// En-têtes de discussion relus sur le serveur (lot U1). Un message qui
+    /// n'en a pas les reçoit vides : il n'est pas redemandé.
+    pub fn set_thread_headers(&mut self, account: &str, path: &str, headers: &[(u32, ThreadHeaders)]) -> Res<()> {
+        if headers.is_empty() {
+            return Ok(());
+        }
+        self.revisions.touch(account, path);
+        let tx = self.conn.savepoint().map_err(sql)?;
+        {
+            let mut update = tx
+                .prepare_cached(
+                    "UPDATE messages SET message_id = ?4, parents = ?5, recipients = ?6 WHERE account = ?1 AND path = ?2 AND uid = ?3",
+                )
+                .map_err(sql)?;
+            for (uid, h) in headers {
+                update.execute(params![account, path, uid, h.message_id, h.parents.join(" "), h.recipients.join(" ")]).map_err(sql)?;
+            }
+        }
+        tx.commit().map_err(sql)
+    }
+
+    /// Conversations d'un compte (lot U1), tous dossiers confondus (messages
+    /// envoyés compris) : (dossier, UID, numéro de conversation) de chaque
+    /// message en cache, du plus ancien au plus récent. `own` : adresses de
+    /// l'utilisateur, en minuscules (voir `threads::group`). Calcul gardé tant
+    /// que le compte n'a pas changé (relecture du lot U1) : la liste peut le
+    /// redemander à chaque affichage.
+    pub fn conversations(&mut self, account: &str, own: &HashSet<String>) -> Res<Conversations> {
+        let revision = self.revisions.of_account(account);
+        let mut own_sorted: Vec<String> = own.iter().cloned().collect();
+        own_sorted.sort_unstable();
+        if let Some(kept) = self.conversations.get(account) {
+            if kept.revision == revision && kept.own == own_sorted {
+                return Ok(Arc::clone(&kept.found));
+            }
+        }
+        let found: Conversations = Arc::from(self.compute_conversations(account, own)?);
+        self.conversations.insert(account.to_string(), KeptConversations { revision, own: own_sorted, found: Arc::clone(&found) });
+        Ok(found)
+    }
+
+    fn compute_conversations(&self, account: &str, own: &HashSet<String>) -> Res<Vec<(String, u32, usize)>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT path, uid, subject, from_email, COALESCE(message_id, ''), COALESCE(parents, ''), COALESCE(recipients, '')
+                 FROM messages WHERE account = ?1 ORDER BY date, path, uid",
+            )
+            .map_err(sql)?;
+        let words = |s: String| s.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+        let rows = stmt
+            .query_map(params![account], |r| {
+                let headers = ThreadHeaders { message_id: r.get(4)?, parents: words(r.get(5)?), recipients: words(r.get(6)?) };
+                Ok(((r.get::<_, String>(0)?, r.get::<_, u32>(1)?), ThreadMessage { headers, subject: r.get(2)?, from_email: r.get(3)? }))
+            })
+            .map_err(sql)?;
+        let (keys, messages): (Vec<(String, u32)>, Vec<ThreadMessage>) =
+            rows.collect::<Result<Vec<_>, _>>().map_err(sql)?.into_iter().unzip();
+        let numbers = crate::threads::group(&messages, own);
+        Ok(keys.into_iter().zip(numbers).map(|((path, uid), n)| (path, uid, n)).collect())
     }
 
     /// Drapeaux relus sur le serveur : seuls les messages dont l'état a changé
@@ -1357,6 +1532,7 @@ impl Cache {
                         date: r.get(5)?,
                         flags: Flags { seen: r.get(6)?, flagged: r.get(7)?, answered: r.get(8)? },
                         has_attachments: r.get(9)?,
+                        thread: None,
                     })
                 },
             )
@@ -1418,6 +1594,7 @@ impl Cache {
                         date: r.get(5)?,
                         flags: Flags { seen: r.get(6)?, flagged: r.get(7)?, answered: r.get(8)? },
                         has_attachments: r.get(9)?,
+                        thread: None,
                     })
                 })
                 .map_err(sql)?;
@@ -1564,6 +1741,7 @@ impl Cache {
                             date: r.get(7)?,
                             flags: Flags { seen: r.get(8)?, flagged: r.get(9)?, answered: r.get(10)? },
                             has_attachments: r.get(11)?,
+                            thread: None,
                         },
                     ))
                 })
@@ -1701,6 +1879,50 @@ impl Cache {
     pub fn sent_remove(&mut self, id: i64) -> Res<()> {
         self.conn.execute("DELETE FROM pending_sent WHERE id = ?1", params![id]).map_err(sql)?;
         Ok(())
+    }
+
+    /// Programme un message (lot W2) ; rend son numéro.
+    pub fn scheduled_put(&mut self, account: &str, send_at: i64, data: &str) -> Res<i64> {
+        self.conn
+            .execute("INSERT INTO scheduled_sends (account, send_at, data) VALUES (?1, ?2, ?3)", params![account, send_at, data])
+            .map_err(sql)?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Messages programmés, du plus proche au plus lointain.
+    pub fn scheduled_all(&self) -> Res<Vec<ScheduledRow>> {
+        let mut stmt = self.conn.prepare("SELECT id, account, send_at, data FROM scheduled_sends ORDER BY send_at, id").map_err(sql)?;
+        let rows = stmt
+            .query_map(params![], |r| Ok(ScheduledRow { id: r.get(0)?, account: r.get(1)?, send_at: r.get(2)?, data: r.get(3)? }))
+            .map_err(sql)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+    }
+
+    /// Numéros des messages programmés à `now` ou avant.
+    pub fn scheduled_due(&self, now: i64) -> Res<Vec<i64>> {
+        let mut stmt = self.conn.prepare_cached("SELECT id FROM scheduled_sends WHERE send_at <= ?1 ORDER BY send_at, id").map_err(sql)?;
+        let rows = stmt.query_map(params![now], |r| r.get(0)).map_err(sql)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+    }
+
+    /// Retire un message programmé et le rend (pour l'envoyer, le modifier ou
+    /// le supprimer) ; `None` s'il n'y est plus : jamais rendu deux fois.
+    pub fn scheduled_take(&mut self, id: i64) -> Res<Option<ScheduledRow>> {
+        let tx = self.conn.savepoint().map_err(sql)?;
+        let row = tx
+            .query_row("SELECT id, account, send_at, data FROM scheduled_sends WHERE id = ?1", params![id], |r| {
+                Ok(ScheduledRow { id: r.get(0)?, account: r.get(1)?, send_at: r.get(2)?, data: r.get(3)? })
+            })
+            .optional()
+            .map_err(sql)?;
+        tx.execute("DELETE FROM scheduled_sends WHERE id = ?1", params![id]).map_err(sql)?;
+        tx.commit().map_err(sql)?;
+        Ok(row)
+    }
+
+    /// Change l'heure d'envoi d'un message programmé ; `false` s'il n'y est plus.
+    pub fn scheduled_reschedule(&mut self, id: i64, send_at: i64) -> Res<bool> {
+        Ok(self.conn.execute("UPDATE scheduled_sends SET send_at = ?2 WHERE id = ?1", params![id, send_at]).map_err(sql)? > 0)
     }
 
     /// Enregistre (ou remplace) la copie de secours d'un brouillon (lot G4).
@@ -2176,6 +2398,7 @@ mod tests {
             date,
             flags: Flags { seen, flagged: false, answered: false },
             has_attachments: uid == 2,
+            thread: None,
         }
     }
 
@@ -2959,5 +3182,54 @@ mod tests {
         assert!(!is_plain(&path), "fichier remplacé par sa copie chiffrée");
         assert!(!g4_contains(&g4_bytes(&path), b"Sujet 3"), "plus rien en clair");
         assert!(!sibling(&path, "-chiffrement").exists(), "copie provisoire remplacée");
+    }
+
+    #[test]
+    fn u1_en_tetes_de_discussion_gardes_relus_et_regroupes() {
+        let mut c = Cache::in_memory().unwrap();
+        let thread = |id: &str, parents: &[&str]| ThreadHeaders {
+            message_id: id.into(),
+            parents: parents.iter().map(|p| (*p).to_string()).collect(),
+            recipients: vec!["moi@example.com".into()],
+        };
+        let mut first = header(1, 100, true);
+        first.thread = Some(thread("a@x", &[]));
+        c.upsert_headers("acc", "INBOX", &[first, header(2, 200, false)]).unwrap();
+        // Relu sans en-têtes de discussion (drapeaux, déplacement) : ceux du cache restent.
+        c.upsert_headers("acc", "INBOX", &[header(1, 100, false)]).unwrap();
+        assert_eq!(c.missing_thread_headers("acc", "INBOX", 10).unwrap(), [2]);
+        // Réponse envoyée, dans un autre dossier, relue en arrière-plan.
+        c.upsert_headers("acc", "Sent", &[header(7, 150, true)]).unwrap();
+        c.set_thread_headers("acc", "Sent", &[(7, thread("b@x", &["a@x"]))]).unwrap();
+        c.set_thread_headers("acc", "INBOX", &[(2, ThreadHeaders::default())]).unwrap();
+        assert!(c.missing_thread_headers("acc", "INBOX", 10).unwrap().is_empty(), "sans en-têtes : pas redemandé");
+        let own = HashSet::from(["moi@example.com".to_string()]);
+        let found = c.conversations("acc", &own).unwrap();
+        assert_eq!(found.to_vec(), [("INBOX".to_string(), 1, 0), ("Sent".to_string(), 7, 0), ("INBOX".to_string(), 2, 1)]);
+        assert_eq!(c.conversations("autre", &own).unwrap().to_vec(), Vec::<(String, u32, usize)>::new());
+        // Gardé tant que le compte ne change pas (relecture du lot U1)…
+        assert!(Arc::ptr_eq(&found, &c.conversations("acc", &own).unwrap()), "pas recalculé");
+        // … recalculé dès qu'un message change, même dans un autre dossier.
+        c.set_thread_headers("acc", "Sent", &[(7, thread("b@x", &[]))]).unwrap();
+        let again = c.conversations("acc", &own).unwrap();
+        assert!(!Arc::ptr_eq(&found, &again));
+        assert_eq!(again.to_vec(), [("INBOX".to_string(), 1, 0), ("Sent".to_string(), 7, 1), ("INBOX".to_string(), 2, 2)]);
+    }
+
+    #[test]
+    fn w2_messages_programmes() {
+        let mut c = Cache::in_memory().unwrap();
+        let tard = c.scheduled_put("a1", 2_000, "{\"b\":1}").unwrap();
+        let tot = c.scheduled_put("a1", 1_000, "{\"a\":1}").unwrap();
+        let all = c.scheduled_all().unwrap();
+        assert_eq!(all.iter().map(|r| r.id).collect::<Vec<_>>(), vec![tot, tard], "du plus proche au plus lointain");
+        assert_eq!(c.scheduled_due(1_500).unwrap(), vec![tot], "seulement ceux dont l'heure est passée");
+        assert!(c.scheduled_reschedule(tard, 1_200).unwrap());
+        assert_eq!(c.scheduled_due(1_500).unwrap(), vec![tot, tard]);
+        let pris = c.scheduled_take(tot).unwrap().expect("présent");
+        assert_eq!((pris.account.as_str(), pris.data.as_str()), ("a1", "{\"a\":1}"));
+        assert!(c.scheduled_take(tot).unwrap().is_none(), "jamais rendu deux fois");
+        c.delete_account("a1").unwrap();
+        assert!(c.scheduled_all().unwrap().is_empty(), "compte retiré : ses messages programmés aussi");
     }
 }

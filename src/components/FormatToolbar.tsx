@@ -17,6 +17,8 @@ import {
   ChevronDown12Regular,
   Image20Regular,
   Link20Regular,
+  MailTemplate20Regular,
+  Signature20Regular,
   Table20Regular,
   TextAlignCenter20Regular,
   TextAlignLeft20Regular,
@@ -52,6 +54,14 @@ interface Props {
   onPlainChange?: (plain: boolean) => void;
   /** Joindre des fichiers ; sans elle (signature, lot T), pas de bouton. */
   onAttach?: () => void;
+  /** Signatures que l'on peut insérer (lots T3, T4) : identifiant et nom. */
+  signatures?: { id: string; label: string }[];
+  /** Insère la signature choisie, à l'endroit du curseur. */
+  onSignature?: (signatureId: string) => void;
+  /** Modèles de messages que l'on peut insérer (lot W3) : identifiant et nom. */
+  templates?: { id: string; label: string }[];
+  /** Insère le modèle choisi, à l'endroit du curseur. */
+  onTemplate?: (templateId: string) => void;
 }
 
 /**
@@ -63,7 +73,17 @@ interface Props {
 type ToolbarHtml = string & { readonly __toolbarHtml: unique symbol };
 const toolbarHtml = (html: string) => html as ToolbarHtml;
 
-export function FormatToolbar({ editor, disabled, plain, onPlainChange, onAttach }: Props) {
+export function FormatToolbar({
+  editor,
+  disabled,
+  plain,
+  onPlainChange,
+  onAttach,
+  signatures = [],
+  onSignature,
+  templates = [],
+  onTemplate,
+}: Props) {
   /** Dernière sélection dans l'éditeur : les menus prennent le focus, on la restaure. */
   const saved = useRef<Range | null>(null);
   const imagePicker = useRef<HTMLInputElement>(null);
@@ -206,9 +226,72 @@ export function FormatToolbar({ editor, disabled, plain, onPlainChange, onAttach
     </button>
   );
 
+  /** Signature insérée au curseur (lots T3, T4) : directement s'il n'y en a qu'une, sinon par un menu. */
+  const pickSignature = (signatureId: string) => {
+    restore();
+    onSignature?.(signatureId);
+  };
+  const signatureTool =
+    onSignature && signatures.length > 0 ? (
+      signatures.length === 1 ? (
+        tool("signature", <Signature20Regular />, t("Signature"), () => pickSignature(signatures[0].id), t("Insérer la signature"))
+      ) : (
+        <Menu onOpenChange={(_, d) => !d.open && restore()}>
+          <MenuTrigger disableButtonEnhancement>
+            <button type="button" className="fmt-btn" title={t("Insérer une signature")} aria-label={t("Insérer une signature")} disabled={disabled} onMouseDown={keep}>
+              <Signature20Regular />
+              <span className="fmt-label">
+                {t("Signature")}
+                <ChevronDown12Regular className="fmt-chevron" />
+              </span>
+            </button>
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList>
+              {signatures.map((sig) => (
+                <MenuItem key={sig.id} onClick={() => pickSignature(sig.id)}>
+                  {sig.label}
+                </MenuItem>
+              ))}
+            </MenuList>
+          </MenuPopover>
+        </Menu>
+      )
+    ) : null;
+
+  /** Modèle inséré au curseur (lot W3), choisi dans un menu même s'il n'y en a qu'un : son nom dit ce qu'il insère. */
+  const templateTool =
+    onTemplate && templates.length > 0 ? (
+      <Menu onOpenChange={(_, d) => !d.open && restore()}>
+        <MenuTrigger disableButtonEnhancement>
+          <button type="button" className="fmt-btn" title={t("Insérer un modèle")} aria-label={t("Insérer un modèle")} disabled={disabled} onMouseDown={keep}>
+            <MailTemplate20Regular />
+            <span className="fmt-label">
+              {t("Modèles")}
+              <ChevronDown12Regular className="fmt-chevron" />
+            </span>
+          </button>
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList className="template-menu">
+            {templates.map((m) => (
+              <MenuItem
+                key={m.id}
+                onClick={() => {
+                  restore();
+                  onTemplate(m.id);
+                }}
+              >
+                {m.label}
+              </MenuItem>
+            ))}
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    ) : null;
+
   const formatSwitch = onPlainChange && (
     <div className="fmt-group fmt-format">
-      <small>{t("Format")}</small>
       <div className="fmt-segmented" role="radiogroup" aria-label={t("Format du message")}>
         {(
           [
@@ -237,7 +320,13 @@ export function FormatToolbar({ editor, disabled, plain, onPlainChange, onAttach
   if (plain) {
     return (
       <div className="fmt-bar" role="toolbar" aria-label={t("Mise en forme")}>
-        {onAttach && <div className="fmt-group">{tool("attach", <Attach20Regular />, t("Pièce jointe"), onAttach, t("Joindre des fichiers"))}</div>}
+        {(onAttach || signatureTool || templateTool) && (
+          <div className="fmt-group">
+            {onAttach && tool("attach", <Attach20Regular />, t("Pièce jointe"), onAttach, t("Joindre des fichiers"))}
+            {signatureTool}
+            {templateTool}
+          </div>
+        )}
         {formatSwitch}
       </div>
     );
@@ -365,6 +454,8 @@ export function FormatToolbar({ editor, disabled, plain, onPlainChange, onAttach
 
       <div className="fmt-group">
         {onAttach && tool("attach", <Attach20Regular />, t("Pièce jointe"), onAttach, t("Joindre des fichiers"))}
+        {signatureTool}
+        {templateTool}
         {tool("quote", <TextQuote20Regular />, t("Citation"), toggleQuote)}
         {tool("clear", <TextClearFormatting20Regular />, t("Effacer"), clearFormatting, t("Effacer la mise en forme"))}
       </div>

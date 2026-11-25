@@ -48,6 +48,8 @@ interface Props {
   selectionCount: number;
   /** Barre d'actions affichée en tête du volet. */
   toolbar: ReactNode;
+  /** Conversation du message (lot U3), affichée sous l'objet. */
+  thread?: ReactNode;
   /** Thème sombre : le corps du message suit (fond sombre, texte clair). */
   dark: boolean;
   onOpenAttachment: (message: Message, a: AttachmentInfo) => Promise<void>;
@@ -281,6 +283,7 @@ export function ReadingPane({
   loading,
   selectionCount,
   toolbar,
+  thread,
   dark,
   onOpenAttachment,
   onSaveAttachments,
@@ -401,6 +404,7 @@ export function ReadingPane({
         <h1 className="reading-subject">{message.subject || t("(sans objet)")}</h1>
         {isValidElement<{ compact?: boolean }>(toolbar) ? cloneElement(toolbar, { compact: true }) : toolbar}
       </div>
+      {thread}
 
       <div className="reading-sender">
         <Avatar name={message.fromName} size={40} color="colorful" />

@@ -5,7 +5,7 @@
 //! Lecture : le cache (`cache.rs`) sert l'interface sans réseau.
 //! Écriture : chaque action réussie sur un serveur est répercutée dans le cache.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
@@ -31,9 +31,10 @@ const LIST_LIMIT: u32 = 200;
 /// Octets du début du texte lus pour l'aperçu (`BODY.PEEK[TEXT]<0.2048>`).
 const PREVIEW_BYTES: usize = 2048;
 
-/// En-têtes + début du texte : de quoi afficher la liste avec un aperçu.
+/// En-têtes + début du texte : de quoi afficher la liste avec un aperçu, et
+/// les en-têtes de discussion (lot U1 : `Message-ID`, `In-Reply-To`, `References`, `Cc`).
 const LIST_QUERY: &str = "(UID FLAGS INTERNALDATE RFC822.SIZE \
-    BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE CONTENT-TYPE CONTENT-TRANSFER-ENCODING MIME-VERSION)] \
+    BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE CONTENT-TRANSFER-ENCODING MIME-VERSION)] \
     BODY.PEEK[TEXT]<0.2048>)";
 
 const FULL_QUERY: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[])";
@@ -42,8 +43,13 @@ const TYPE_QUERY: &str = "(UID BODY.PEEK[HEADER.FIELDS (CONTENT-TYPE)])";
 
 /// Comme `LIST_QUERY`, avec le `Message-ID` (dédoublonnage des résultats de recherche).
 const SEARCH_QUERY: &str = "(UID FLAGS INTERNALDATE RFC822.SIZE \
-    BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE MESSAGE-ID CONTENT-TYPE CONTENT-TRANSFER-ENCODING MIME-VERSION)] \
+    BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE CONTENT-TRANSFER-ENCODING MIME-VERSION)] \
     BODY.PEEK[TEXT]<0.2048>)";
+
+/// En-têtes de discussion seuls, pour les messages mis en cache avant le lot U1.
+const THREAD_QUERY: &str = "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES TO CC)])";
+/// Messages dont les en-têtes de discussion sont relus à chaque synchronisation d'un dossier, au plus.
+const THREAD_BACKFILL: usize = 500;
 
 /// Résultats de recherche : au plus tant par dossier, et au total.
 const SEARCH_PER_FOLDER: usize = 60;
@@ -674,8 +680,39 @@ fn sync_mailbox(account: &ImapAccount, cache: &Mutex<Cache>, mailbox: &str) -> R
             c.set_modseq_state(&account_id, &mailbox, modseq, info.exists)
         })
         .map_err(backend)?;
+    backfill_thread_headers(account, cache, &account_id, &mailbox);
     guard(&account.verified).insert(mailbox);
     Ok(())
+}
+
+/// En-têtes de discussion des messages mis en cache avant le lot U1 (décision
+/// de Fabrice du 24 novembre 2026 : relus plutôt qu'ignorés), par tranches,
+/// après la synchronisation : l'affichage n'attend pas. Un échec (réseau)
+/// n'est pas une erreur de synchronisation ; la tranche est redemandée à la suivante.
+fn backfill_thread_headers(account: &ImapAccount, cache: &Mutex<Cache>, account_id: &str, mailbox: &str) {
+    // Verrou du cache rendu avant le journal et avant le serveur.
+    let missing = lock_cache(cache).missing_thread_headers(account_id, mailbox, THREAD_BACKFILL);
+    let missing = match missing {
+        Ok(missing) if !missing.is_empty() => missing,
+        Ok(_) => return,
+        Err(e) => {
+            crate::diag::report(&e);
+            return;
+        }
+    };
+    let fetched = account.run(Lane::Sync, |s| {
+        if s.selected() != Some(mailbox) {
+            s.select(mailbox)?;
+        }
+        s.uid_fetch(&missing, THREAD_QUERY)
+    });
+    let Ok(items) = fetched else { return };
+    let headers: Vec<(u32, crate::threads::ThreadHeaders)> =
+        items.iter().filter_map(|i| Some((i.uid()?, crate::threads::thread_headers(i.body("BODY[HEADER").unwrap_or_default())))).collect();
+    let stored = lock_cache(cache).set_thread_headers(account_id, mailbox, &headers);
+    if let Err(e) = stored {
+        crate::diag::report(&e);
+    }
 }
 
 /// Archive Gmail : « Tous les messages » sans ce qui est encore dans la
@@ -1053,6 +1090,7 @@ fn header_from(item: &FetchItem) -> Option<Header> {
         date: item.internal_date().or(parsed.date).unwrap_or(0),
         flags: flags_from(item),
         has_attachments: mimeparse::looks_like_attachment(headers),
+        thread: Some(crate::threads::thread_headers(headers)),
     })
 }
 
@@ -1066,6 +1104,24 @@ fn backend(e: String) -> MailError {
 
 /// Taille totale maximale des pièces jointes d'un envoi.
 pub(crate) const MAX_ATTACHMENTS: usize = 25 * 1024 * 1024;
+
+/// Conversations d'un dossier (lot U2), pour la liste.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderConversations {
+    /// Numéro de conversation de chaque message du dossier.
+    pub conversation: HashMap<MessageId, usize>,
+    /// Messages envoyés qui font partie de ces conversations.
+    pub sent: Vec<SentInConversation>,
+}
+
+/// Message envoyé montré dans une conversation dépliée (lot U2).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentInConversation {
+    pub conversation: usize,
+    pub message: MessageSummary,
+}
 
 /// Pièce jointe à envoyer : fichier choisi (base64) ou pièce d'un message existant (transfert).
 /// Sérialisée pour rendre un message à la rédaction après un envoi échoué (lot E1).
@@ -1656,6 +1712,7 @@ impl Router {
                 date: summary.date,
                 flags: summary.flags,
                 has_attachments: summary.has_attachments,
+                thread: None,
             };
             let _ = c.upsert_headers(&r.account, &r.mailbox, &[header]);
         }
@@ -2567,6 +2624,7 @@ impl Router {
                     date,
                     flags: Flags { seen: true, flagged: false, answered: false },
                     has_attachments: !draft.attachments.is_empty(),
+                    thread: None,
                 };
                 let mut c = self.cache();
                 c.upsert_headers(account_id, &mailbox, &[header]).map_err(backend)?;
@@ -2993,6 +3051,47 @@ impl Router {
 
     pub fn folder_by_role(&self, account_id: &str, role: FolderRole) -> Option<FolderId> {
         self.imap_account(account_id).ok()?.find_folder(|f| f.role == role).map(|f| f.id)
+    }
+
+    /// Conversations d'un dossier (lot U2) : celle de chaque message du
+    /// dossier, et les messages envoyés qui en font partie (décision de
+    /// Fabrice du 24 novembre 2026 : comptés et montrés dans la conversation
+    /// dépliée). Les numéros ne valent que pour cette réponse.
+    pub fn folder_conversations(&self, folder_id: &str) -> Result<FolderConversations, MailError> {
+        let (account, path) = Self::split_folder(folder_id)?;
+        // L'utilisateur n'est jamais un correspondant en commun (`threads::group`).
+        let own: HashSet<String> = self.config(&account).map(|c| c.email.to_lowercase()).into_iter().collect();
+        let sent = self
+            .folder_by_role(&account, FolderRole::Sent)
+            .and_then(|f| Self::split_folder(&f).ok())
+            .map(|(_, mailbox)| mailbox)
+            .filter(|mailbox| *mailbox != path);
+        let mut c = lock_cache(&self.cache);
+        let all = c.conversations(&account, &own).map_err(backend)?;
+        let mut conversation = HashMap::new();
+        let mut sent_uids = HashMap::new();
+        for (mailbox, uid, n) in all.iter() {
+            if *mailbox == path {
+                let id = c.id_for(ImapRef { account: account.clone(), mailbox: mailbox.clone(), uid: *uid });
+                conversation.insert(id, *n);
+            } else if sent.as_ref() == Some(mailbox) {
+                sent_uids.insert(*uid, *n);
+            }
+        }
+        let wanted: HashSet<usize> = conversation.values().copied().collect();
+        let sent = match sent {
+            Some(mailbox) => c
+                .list(&account, &mailbox)
+                .map_err(backend)?
+                .into_iter()
+                .filter_map(|message| {
+                    let n = *sent_uids.get(&message.uid)?;
+                    wanted.contains(&n).then_some(SentInConversation { conversation: n, message })
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        Ok(FolderConversations { conversation, sent })
     }
 
     pub fn message_location(&self, id: MessageId) -> mail_core::Result<FolderId> {
@@ -3647,6 +3746,7 @@ mod tests {
             date: i64::from(uid),
             flags: Flags::default(),
             has_attachments: false,
+            thread: None,
         };
         lock_cache(&cache).upsert_headers("mailo", "INBOX", &[header(5), header(9)]).unwrap();
         let ids: Vec<MessageId> = [5, 9]
@@ -3821,6 +3921,7 @@ mod tests {
             date: i64::from(uid),
             flags: Flags::default(),
             has_attachments: false,
+            thread: None,
         };
         lock_cache(&cache).upsert_headers("mailo", "INBOX", &[header(1), header(2)]).unwrap();
         let mut st = Prefetch {
@@ -3859,6 +3960,7 @@ mod tests {
             date: 1,
             flags: Flags::default(),
             has_attachments: false,
+            thread: None,
         };
         lock_cache(&cache).upsert_headers("mailo", "INBOX", &[header]).unwrap();
         let router = Router::new(vec![AccountConfig { offline_bodies: false, ..config("mailo") }], Arc::clone(&cache));
@@ -4040,6 +4142,91 @@ mod tests {
             "note oubliée une fois restauré"
         );
         assert!(matches!(refused, Err(MailError::InvalidTarget(_))), "hors des éléments supprimés : {refused:?}");
+    }
+
+    #[test]
+    fn u1_en_tetes_de_discussion_relus_en_arriere_plan() {
+        // Messages mis en cache avant le lot U1 : en-têtes de discussion
+        // demandés au serveur, enregistrés, et pris en compte par les
+        // conversations ; un message absent de la réponse reste à relire.
+        let cache = Arc::new(Mutex::new(Cache::in_memory().unwrap()));
+        let router = Router::new(vec![config("mailo")], Arc::clone(&cache));
+        let header = |uid: u32, subject: &str| Header {
+            uid,
+            from_name: String::new(),
+            from_email: "a@example.com".into(),
+            subject: subject.into(),
+            preview: String::new(),
+            date: i64::from(uid),
+            flags: Flags::default(),
+            has_attachments: false,
+            thread: None,
+        };
+        lock_cache(&cache).upsert_headers("mailo", "INBOX", &[header(4, "Devis"), header(5, "Suite"), header(6, "Autre")]).unwrap();
+        let item = |uid: u32, block: &str| {
+            format!(
+                "* {uid} FETCH (UID {uid} BODY[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES TO CC)] {{{}}}\r\n{block})\r\n",
+                block.len()
+            )
+        };
+        let fetch = format!(
+            "{}{}",
+            item(4, "Message-ID: <m4@example.com>\r\n\r\n"),
+            item(5, "Message-ID: <m5@example.com>\r\nIn-Reply-To: <m4@example.com>\r\nTo: Moi <moi@example.com>\r\n\r\n")
+        );
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&received);
+        TEST_SERVER.with(|s| *s.borrow_mut() = Some(Box::new(move || Scripted::open(None, false, fetch.clone(), &log))));
+        let account = router.imap_account("mailo").unwrap();
+        backfill_thread_headers(&account, &cache, "mailo", "INBOX");
+        TEST_SERVER.with(|s| *s.borrow_mut() = None);
+
+        let commands = received.lock().unwrap().clone();
+        assert!(
+            commands.iter().any(|c| c.starts_with("> UID FETCH") && c.contains("MESSAGE-ID IN-REPLY-TO REFERENCES TO CC")),
+            "{commands:?}"
+        );
+        assert_eq!(lock_cache(&cache).missing_thread_headers("mailo", "INBOX", 10).unwrap(), [6], "6 absent de la réponse : à relire");
+        let own = HashSet::from(["moi@example.com".to_string()]);
+        let found = lock_cache(&cache).conversations("mailo", &own).unwrap();
+        assert_eq!(found.to_vec(), [("INBOX".to_string(), 4, 0), ("INBOX".to_string(), 5, 0), ("INBOX".to_string(), 6, 1)]);
+    }
+
+    #[test]
+    fn u2_conversations_du_dossier_avec_les_envoyes() {
+        let cache = Arc::new(Mutex::new(Cache::in_memory().unwrap()));
+        let tree = build_folders("mailo", vec![entry("INBOX", &[]), entry("Sent", &["\\Sent"])]);
+        lock_cache(&cache).save_folders("mailo", &tree).unwrap();
+        let router = Router::new(vec![config("mailo")], Arc::clone(&cache));
+        let header = |uid: u32, subject: &str, id: &str, parents: &[&str]| Header {
+            uid,
+            from_name: String::new(),
+            from_email: "alice@example.com".into(),
+            subject: subject.into(),
+            preview: String::new(),
+            date: i64::from(uid),
+            flags: Flags::default(),
+            has_attachments: false,
+            thread: Some(crate::threads::ThreadHeaders {
+                message_id: id.into(),
+                parents: parents.iter().map(|p| (*p).to_string()).collect(),
+                recipients: vec!["moi@example.com".into()],
+            }),
+        };
+        {
+            let mut c = lock_cache(&cache);
+            c.upsert_headers("mailo", "INBOX", &[header(4, "Devis", "m4@x", &[]), header(6, "Autre", "m6@x", &[])]).unwrap();
+            c.upsert_headers("mailo", "Sent", &[header(7, "Re: Devis", "m7@x", &["m4@x"]), header(8, "Ailleurs", "m8@x", &[])]).unwrap();
+        }
+        let found = router.folder_conversations("mailo:INBOX").unwrap();
+        let id = |mailbox: &str, uid: u32| lock_cache(&cache).id_for(ImapRef { account: "mailo".into(), mailbox: mailbox.into(), uid });
+        let devis = found.conversation[&id("INBOX", 4)];
+        assert_ne!(devis, found.conversation[&id("INBOX", 6)]);
+        assert_eq!(found.conversation.len(), 2, "seulement les messages du dossier");
+        let sent: Vec<(usize, u32)> = found.sent.iter().map(|s| (s.conversation, s.message.uid)).collect();
+        assert_eq!(sent, [(devis, 7)], "la réponse envoyée, pas l'envoi sans rapport");
+        // Dans « Éléments envoyés » lui-même, pas de doublon des envoyés.
+        assert_eq!(router.folder_conversations("mailo:Sent").unwrap().sent.len(), 0);
     }
 
     #[test]

@@ -5,14 +5,42 @@
 import { useEffect, useState } from "react";
 import { parseHtml } from "./safe-html";
 import { secureStore } from "./secure-store";
+import { randomId } from "./text";
+
+/** Une signature d'un compte (lot T4) : ses deux formes, chacune pour les messages de son format. */
+export interface SignatureEntry {
+  id: string;
+  /** Nom choisi pour la reconnaître (vide : « Signature »). */
+  name: string;
+  /** Forme mise en forme, pour les messages en HTML. */
+  html: string;
+  /** Forme en texte simple, pour les messages en texte brut. */
+  text: string;
+}
+
+/** Signatures d'un compte (lot T4) et celle ajoutée d'office. */
+export interface SignatureSet {
+  list: SignatureEntry[];
+  defaultId: string;
+}
 
 export interface MailSettings {
-  /** Signature en texte simple par compte (messages en texte brut). */
+  /** Avant le lot T4 : signature en texte simple par compte, reprise comme sa première signature. */
   signatures: Record<string, string>;
-  /** Signature mise en forme (HTML) par compte, pour les messages en HTML (lot T). */
+  /** Avant le lot T4 : signature mise en forme par compte (lot T), reprise de même. */
   htmlSignatures: Record<string, string>;
-  /** Signature aussi dans les réponses et transferts. */
+  /** Signatures de chaque compte (lot T4). */
+  signatureSets: Record<string, SignatureSet>;
+  /** Signature ajoutée d'elle-même aux nouveaux messages (lot T3). */
+  signatureOnNew: boolean;
+  /** Signature ajoutée d'elle-même aux réponses. */
   signatureOnReplies: boolean;
+  /** Signature ajoutée d'elle-même aux transferts (lot T3 : réglage séparé des réponses). */
+  signatureOnForwards: boolean;
+  /** Modèles de messages (lot W3), communs ou propres à un compte. */
+  templates: MessageTemplate[];
+  /** Délai pendant lequel un envoi peut être annulé, en secondes (lot W1 ; 0 : aucun). */
+  undoSendSeconds: number;
   /** Fréquence de la synchronisation automatique, en minutes. */
   syncMinutes: number;
   /** Avertir à l'envoi quand le message parle d'une pièce jointe absente. */
@@ -26,6 +54,9 @@ const CHANGED = "librix-settings";
 
 export const SYNC_CHOICES = [1, 2, 5, 10, 15, 30];
 
+/** Délais proposés pour annuler un envoi, en secondes (lot W1). */
+export const UNDO_SEND_CHOICES = [0, 5, 10, 20, 30];
+
 /** Mots par défaut (français, anglais, espagnol). */
 export const DEFAULT_ATTACHMENT_WORDS =
   "pièce jointe, pièces jointes, PJ, P.J., ci-joint, ci-jointe, ci-joints, ci-jointes, joint, jointe, joints, jointes, " +
@@ -34,7 +65,12 @@ export const DEFAULT_ATTACHMENT_WORDS =
 const DEFAULTS: MailSettings = {
   signatures: {},
   htmlSignatures: {},
+  signatureSets: {},
+  signatureOnNew: true,
   signatureOnReplies: true,
+  signatureOnForwards: true,
+  templates: [],
+  undoSendSeconds: 10,
   syncMinutes: 2,
   attachmentReminder: true,
   attachmentWords: DEFAULT_ATTACHMENT_WORDS,
@@ -42,7 +78,10 @@ const DEFAULTS: MailSettings = {
 
 export function loadSettings(): MailSettings {
   try {
-    return { ...DEFAULTS, ...(JSON.parse(secureStore.getItem(KEY) ?? "{}") as Partial<MailSettings>) };
+    const stored = JSON.parse(secureStore.getItem(KEY) ?? "{}") as Partial<MailSettings>;
+    // Avant le lot T3, un seul réglage valait pour les réponses et les transferts.
+    const forwards = stored.signatureOnForwards ?? stored.signatureOnReplies ?? DEFAULTS.signatureOnForwards;
+    return { ...DEFAULTS, ...stored, signatureOnForwards: forwards };
   } catch {
     return { ...DEFAULTS };
   }
@@ -102,27 +141,65 @@ export function cleanSignatureHtml(html: string): string {
   return kept ? box.innerHTML.trim() : "";
 }
 
-/** Signature mise en forme d'un compte, pour un message en HTML : sinon sa signature en texte simple. */
-export function signatureContent(accountId: string): string {
-  const s = loadSettings();
+/** Nouvelle signature, vide. */
+export function newSignature(name = ""): SignatureEntry {
+  return { id: randomId(6), name, html: "", text: "" };
+}
+
+/** Signatures d'un compte ; celle d'avant le lot T4, s'il en avait une, devient la première. */
+export function accountSignatures(accountId: string, s: MailSettings = loadSettings()): SignatureSet {
+  const set = s.signatureSets[accountId];
+  if (set) return set;
   const html = (s.htmlSignatures[accountId] ?? "").trim();
-  if (html) return html;
   const text = (s.signatures[accountId] ?? "").trimEnd();
+  if (!html && !text) return { list: [], defaultId: "" };
+  return { list: [{ id: "s1", name: "", html, text }], defaultId: "s1" };
+}
+
+/** Enregistre les signatures d'un compte. */
+export function saveAccountSignatures(accountId: string, set: SignatureSet) {
+  const s = loadSettings();
+  saveSettings({ ...s, signatureSets: { ...s.signatureSets, [accountId]: set } });
+}
+
+/** Signature d'un compte : celle demandée, sinon celle par défaut, sinon la première. */
+function findSignature(accountId: string, signatureId?: string | null): SignatureEntry | undefined {
+  const { list, defaultId } = accountSignatures(accountId);
+  return (signatureId ? list.find((e) => e.id === signatureId) : undefined) ?? list.find((e) => e.id === defaultId) ?? list[0];
+}
+
+/** Une signature a-t-elle un contenu, dans l'une ou l'autre forme ? */
+export const signatureFilled = (e: SignatureEntry) => e.html.trim() !== "" || e.text.trim() !== "";
+
+/** Forme mise en forme d'une signature, pour un message en HTML : sinon sa forme en texte simple. */
+export function signatureContent(accountId: string, signatureId?: string | null): string {
+  const e = findSignature(accountId, signatureId);
+  if (!e) return "";
+  const html = e.html.trim();
+  if (html) return html;
+  const text = e.text.trimEnd();
   return text ? textToSignatureHtml(text) : "";
 }
 
-/** Signature en texte simple d'un compte, pour un message en texte brut : sinon le texte de sa signature mise en forme. */
-export function plainSignatureContent(accountId: string): string {
-  const s = loadSettings();
-  const text = (s.signatures[accountId] ?? "").trimEnd();
-  if (text) return textToSignatureHtml(text);
-  const html = (s.htmlSignatures[accountId] ?? "").trim();
+/** Texte d'une signature pour un message en texte brut : sa forme en texte simple, sinon le texte de la mise en forme. */
+export function plainSignatureText(accountId: string, signatureId?: string | null): string {
+  const e = findSignature(accountId, signatureId);
+  if (!e) return "";
+  const text = e.text.trimEnd();
+  if (text) return text;
+  const html = e.html.trim();
   if (!html) return "";
   const box = document.createElement("div");
   box.append(parseHtml(html));
   box.querySelectorAll("br").forEach((br) => br.replaceWith("\n"));
   box.querySelectorAll("p, div, li, tr").forEach((b) => b.append("\n"));
-  return textToSignatureHtml((box.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim());
+  return (box.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** Forme en texte simple d'une signature, en HTML (lignes séparées par des <br>). */
+export function plainSignatureContent(accountId: string, signatureId?: string | null): string {
+  const text = plainSignatureText(accountId, signatureId);
+  return text ? textToSignatureHtml(text) : "";
 }
 
 /** Le HTML d'un nouveau message, avec la signature en texte simple à la place de la mise en forme. */
@@ -131,16 +208,66 @@ export function withPlainSignature(html: string, accountId: string): string {
   box.append(parseHtml(html));
   const block = box.querySelector("[data-signature]");
   if (!block) return html;
-  block.replaceChildren(parseHtml(plainSignatureContent(accountId)));
+  block.replaceChildren(parseHtml(plainSignatureContent(accountId, block.getAttribute("data-signature"))));
   return box.innerHTML;
 }
 
-/** Bloc de signature à placer dans un nouveau message (repérable pour changer de compte). */
-export function signatureBlock(accountId: string, reply: boolean): string {
+/** Type de message rédigé, pour savoir s'il reçoit la signature d'office (lot T3). */
+export type SignatureUse = "new" | "reply" | "forward";
+
+/** Bloc de signature à placer dans un message (repérable pour changer de compte). */
+export function signatureBlock(accountId: string, use: SignatureUse): string {
   const s = loadSettings();
-  if (reply && !s.signatureOnReplies) return "";
-  const content = signatureContent(accountId);
-  return content ? `<p><br></p><div data-signature="1">${content}</div>` : "";
+  const wanted = { new: s.signatureOnNew, reply: s.signatureOnReplies, forward: s.signatureOnForwards }[use];
+  if (!wanted) return "";
+  const entry = findSignature(accountId);
+  const content = entry ? signatureContent(accountId, entry.id) : "";
+  return content ? `<p><br></p><div data-signature="${signatureMark(entry?.id)}">${content}</div>` : "";
+}
+
+/** Valeur de `data-signature` : la signature placée (lettres et chiffres seulement). */
+export function signatureMark(signatureId: string | undefined): string {
+  return (signatureId ?? "").replace(/[^A-Za-z0-9]/g, "") || "1";
+}
+
+// ------------------------------------------------------------------ modèles de messages (lot W3)
+
+/** Un modèle de message : réponse toute faite, insérée par le bouton « Modèles » de la rédaction. */
+export interface MessageTemplate {
+  id: string;
+  /** Nom affiché dans le menu de la rédaction (vide : « Modèle »). */
+  name: string;
+  /** Compte auquel il est proposé ; vide : tous les comptes. */
+  accountId: string;
+  /** Objet, placé dans le message seulement si son objet est vide. */
+  subject: string;
+  /** Texte mis en forme, nettoyé comme une signature (`cleanSignatureHtml`). */
+  html: string;
+}
+
+/** Modèles au plus, pour que le menu de la rédaction reste lisible. */
+export const MAX_TEMPLATES = 20;
+
+/** Nouveau modèle, vide, pour tous les comptes. */
+export function newTemplate(name = ""): MessageTemplate {
+  return { id: randomId(6), name, accountId: "", subject: "", html: "" };
+}
+
+/** Un modèle a-t-il quelque chose à insérer ? */
+export const templateFilled = (m: MessageTemplate) => m.html.trim() !== "" || m.subject.trim() !== "";
+
+/** Modèles proposés à la rédaction pour un compte : les siens et les communs, dans l'ordre de la liste. */
+export function templatesFor(accountId: string, s: MailSettings = loadSettings()): MessageTemplate[] {
+  return s.templates.filter((m) => (m.accountId === "" || m.accountId === accountId) && templateFilled(m));
+}
+
+/** Enregistre les modèles (20 au plus) nettoyés comme les signatures ; un modèle vide et sans nom est oublié. */
+export function saveTemplates(list: MessageTemplate[]) {
+  const templates = list
+    .filter((m) => templateFilled(m) || m.name.trim() !== "")
+    .slice(0, MAX_TEMPLATES)
+    .map((m) => ({ ...m, name: m.name.trim(), subject: m.subject.trim(), html: cleanSignatureHtml(m.html) }));
+  saveSettings({ ...loadSettings(), templates });
 }
 
 // ------------------------------------------------------------------ pièce jointe oubliée

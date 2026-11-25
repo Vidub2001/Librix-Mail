@@ -25,6 +25,8 @@ import {
   MailUnread16Regular,
   Open16Regular,
   Save16Regular,
+  ChevronDown16Regular,
+  ChevronRight16Regular,
 } from "@fluentui/react-icons";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { groupByDate, listDate } from "../format";
@@ -34,6 +36,8 @@ import type { Account, Folder, MessageSummary } from "../types";
 import { isUnified } from "../unified";
 import { t } from "../i18n";
 import { LibrixSpinner } from "./LibrixSpinner";
+
+import type { ThreadInfo } from "../conversations";
 
 export type SortMode = "date-desc" | "date-asc" | "from" | "subject";
 export type FilterMode = "all" | "unread" | "flagged" | "attachments";
@@ -78,6 +82,9 @@ interface Props {
   onQuickSeen: (m: MessageSummary) => void;
   onQuickFlag: (m: MessageSummary) => void;
   onQuickDelete: (m: MessageSummary) => void;
+  /** Conversations (lot U2) : place de chaque ligne, et dépliage. */
+  threads?: Map<number, ThreadInfo>;
+  onToggleThread?: (conversation: number) => void;
   /** Clic droit › lu / non lu et indicateur : ce message, ou la sélection qui le contient. */
   onMenuSeen: (m: MessageSummary) => void;
   onMenuFlag: (m: MessageSummary) => void;
@@ -133,6 +140,8 @@ interface RowActions {
   quickFlag: (m: MessageSummary) => void;
   quickDelete: (m: MessageSummary) => void;
   menu: (m: MessageSummary, x: number, y: number) => void;
+  /** Déplie ou replie une conversation (lot U2). */
+  toggleThread: (conversation: number) => void;
 }
 
 /** Une ligne de la liste ; mémorisée pour ne pas tout redessiner à chaque clic. */
@@ -144,6 +153,7 @@ const Row = memo(function Row({
   ownerColor,
   ownerName,
   folderText,
+  thread,
   actions,
 }: {
   /** Formats de date/heure : change quand le réglage change, pour redessiner. */
@@ -156,9 +166,22 @@ const Row = memo(function Row({
   ownerColor?: string;
   ownerName?: string;
   folderText?: string;
+  /** Place dans une conversation (lot U2) ; absente pour un message seul. */
+  thread?: ThreadInfo;
   actions: RowActions;
 }) {
-  const classes = ["msg", !m.flags.seen && "unread", selected && "selected", active && "active"].filter(Boolean).join(" ");
+  // Conversation : la ligne de tête est en gras s'il reste un non lu dans la conversation.
+  const unread = thread?.head ? thread.unread > 0 : !m.flags.seen;
+  const classes = [
+    "msg",
+    unread && "unread",
+    selected && "selected",
+    active && "active",
+    thread && !thread.head && "thread-member",
+    thread?.sent && "thread-sent",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <div
       id={rowId(m.id)}
@@ -189,6 +212,22 @@ const Row = memo(function Row({
         actions.menu(m, e.clientX, e.clientY);
       }}
     >
+      {thread?.head && (
+        <button
+          type="button"
+          className="thread-toggle"
+          aria-expanded={thread.expanded}
+          aria-label={thread.expanded ? t("Replier la conversation") : t("Déplier la conversation")}
+          title={thread.expanded ? t("Replier la conversation") : t("Déplier la conversation")}
+          onClick={(e) => {
+            e.stopPropagation();
+            actions.toggleThread(thread.conversation);
+          }}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          {thread.expanded ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+        </button>
+      )}
       <Avatar className="msg-avatar" name={m.fromName || m.fromEmail} size={36} color="colorful" />
       <div className="msg-body">
         <div className="msg-line">
@@ -196,6 +235,11 @@ const Row = memo(function Row({
             <span className="account-dot msg-account-dot" style={{ background: ownerColor }} title={ownerName} />
           )}
           <span className="msg-from">{m.fromName || m.fromEmail}</span>
+          {thread?.head && (
+            <span className="thread-count" title={t("{n} messages dans la conversation", { n: thread.count })}>
+              {thread.count}
+            </span>
+          )}
           <span className="msg-meta">
             {m.hasAttachments && <Attach16Regular />}
             {m.flags.flagged && <Flag16Filled className="flag" />}
@@ -239,6 +283,7 @@ const Row = memo(function Row({
         </div>
         <div className="msg-subject">
           {folderText !== undefined && <span className="msg-folder">{folderText}</span>}
+          {thread?.sent && <span className="msg-folder">{t("Envoyé")}</span>}
           {m.subject || t("(sans objet)")}
         </div>
         <div className="msg-preview">{m.preview}</div>
@@ -286,6 +331,7 @@ export function MessageList(p: Props) {
       quickFlag: (m) => live.current.onQuickFlag(m),
       quickDelete: (m) => live.current.onQuickDelete(m),
       menu: (m, x, y) => setMenu({ m, x, y }),
+      toggleThread: (n) => live.current.onToggleThread?.(n),
     }),
     [],
   );
@@ -545,6 +591,7 @@ export function MessageList(p: Props) {
                 ownerColor={unified ? accountById.get(m.accountId)?.color : undefined}
                 ownerName={unified ? accountById.get(m.accountId)?.name : undefined}
                 folderText={searching ? p.folderLabel(m.folderId) : undefined}
+                thread={p.threads?.get(m.id)}
                 actions={actions}
                 stamp={stamp}
               />

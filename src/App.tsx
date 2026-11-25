@@ -17,7 +17,8 @@ import { listen } from "@tauri-apps/api/event";
 import { api, runningInTauri } from "./api";
 import { backups, clearBackup } from "./drafts";
 import { useMailSettings } from "./settings";
-import { useGeneral } from "./general";
+import { conversationsIn, useGeneral } from "./general";
+import { mergeConversations, threadRows, withConversations } from "./conversations";
 import { useReminders } from "./reminders";
 import { announceArrivals, newRule, runInboxRules, type Rule } from "./rules";
 import { answerInvitation, applyInvitation, eventWhen } from "./invitation";
@@ -31,13 +32,17 @@ import { ActionBar } from "./components/ActionBar";
 import { StatusBar } from "./components/StatusBar";
 import { darkTheme, lightTheme, useThemeMode } from "./theme";
 import { locale, t } from "./i18n";
-import { FolderPane } from "./components/FolderPane";
+import { FolderPane, SCHEDULED_ID } from "./components/FolderPane";
+import { ScheduledList } from "./components/ScheduledList";
+import { longDate } from "./format";
 import { MessageList, type FilterMode, type SortMode } from "./components/MessageList";
 import { NavRail } from "./components/NavRail";
 import { ReadingPane } from "./components/ReadingPane";
 import { pickById, whenAccepted, withFlag } from "./selection";
 import { useUpdateCheck } from "./updates";
 import { UpdateDialog } from "./components/UpdateDialog";
+import { ShortcutsDialog } from "./components/ShortcutsDialog";
+import { shortcutFor, type ShortcutId } from "./shortcuts";
 import type {
   Account,
   MailChanged,
@@ -47,10 +52,13 @@ import type {
   FolderRole,
   Message,
   MessageSummary,
+  FolderConversations,
   MoveReport,
+  ScheduledItem,
   SendReport,
 } from "./types";
 import { LibrixSpinner } from "./components/LibrixSpinner";
+import { ConversationStrip } from "./components/ConversationStrip";
 
 /** Erreur due à l'absence de réseau (et non à un compte mal configuré) ? */
 function isNetworkError(message: string): boolean {
@@ -127,9 +135,19 @@ export default function App() {
   );
 }
 
+/** « Envoi dans 10 s », décompté chaque seconde (lot W1). */
+function SendCountdown({ seconds }: { seconds: number }) {
+  const [left, setLeft] = useState(seconds);
+  useEffect(() => {
+    const timer = window.setInterval(() => setLeft((n) => Math.max(0, n - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <>{left > 0 ? t("Envoi dans {n} s", { n: left }) : t("Envoi en cours…")}</>;
+}
+
 function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
   const toasterId = useId("toaster");
-  const { dispatchToast } = useToastController(toasterId);
+  const { dispatchToast, dismissToast } = useToastController(toasterId);
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   /** Comptes connus, lus par les fonctions mémorisées (noms dans les messages d'erreur). */
@@ -137,6 +155,9 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
   accountsRef.current = accounts;
   const [folders, setFolders] = useState<Folder[]>([]);
   const [folderId, setFolderId] = useState<string | null>(null);
+  /** Messages programmés (lot W2), et « À envoyer » affiché à la place de la liste. */
+  const [scheduled, setScheduled] = useState<ScheduledItem[]>([]);
+  const [showScheduled, setShowScheduled] = useState(false);
   const [messages, setMessages] = useState<MessageSummary[]>([]);
   /**
    * Messages retirés de la liste dès la demande de déplacement ou de
@@ -226,6 +247,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
 
   /** Fenêtre de saisie ou de confirmation en cours (dossiers). */
   const [dialog, setDialog] = useState<JSX.Element | null>(null);
+  /** Fenêtre d'aide des raccourcis clavier (lot V). */
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // Le menu du moteur web (Précédent, Recharger, Inspecter…) n'a rien à faire ici ;
   // il reste dans les champs de saisie pour copier-coller.
@@ -260,7 +283,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
   }, [widths]);
 
   // Disposition (Paramètres › Général) : volet de lecture à droite, en bas ou masqué.
-  const { layout, keepInTray } = useGeneral();
+  const generalSettings = useGeneral();
+  const { layout, keepInTray } = generalSettings;
 
   // Zone de notification (lot B3) : réglage transmis au backend, qui cache la
   // fenêtre au lieu de la fermer ; « Nouveau message » depuis le menu de l'icône.
@@ -576,8 +600,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
 
   // Ouvre le message quand un seul est sélectionné, et le marque comme lu.
   const single = selectedIds.length === 1 ? selectedIds[0] : null;
+  /** Message de la conversation ouvert dans le volet à la place de celui sélectionné (lot U3). */
+  const [pickedInThread, setPickedInThread] = useState<number | null>(null);
+  useEffect(() => setPickedInThread(null), [single]);
+  const shownId = single === null ? null : (pickedInThread ?? single);
   useEffect(() => {
-    if (single === null) {
+    if (shownId === null) {
       setCurrent(null);
       setLoadingMessage(false);
       return;
@@ -585,7 +613,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
     let cancelled = false;
     setLoadingMessage(true);
     api
-      .getMessage(single)
+      .getMessage(shownId)
       .then(async (m) => {
         if (cancelled) return;
         setCurrent(m);
@@ -603,7 +631,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
     return () => {
       cancelled = true;
     };
-  }, [single, fail]);
+  }, [shownId, fail]);
 
   /** Liste affichée : recherche, filtre puis tri. */
   const visible = useMemo(() => {
@@ -631,16 +659,62 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const selectedMessages = useMemo(() => pickById(visible, selectedSet), [visible, selectedSet]);
 
+  // Conversations (lot U2) : hors recherche et hors dossiers unifiés, selon le réglage.
+  const threaded = folderId !== null && searchResults === null && !search.trim() && conversationsIn(generalSettings, folderId);
+  // Boîte unifiée : les conversations de chacun de ses dossiers.
+  // Clé stable : la liste des dossiers change (compteurs) sans que ses membres changent.
+  const threadFolders = !folderId ? "" : isUnified(folderId) ? members(folderId, folders).map((f) => f.id).join("\n") : folderId;
+  const [conversations, setConversations] = useState<FolderConversations | null>(null);
+  const [expandedThreads, setExpandedThreads] = useState<ReadonlySet<number>>(new Set());
+  useEffect(() => {
+    setExpandedThreads(new Set());
+  }, [folderId]);
+  useEffect(() => {
+    if (!threaded || !folderId) {
+      setConversations(null);
+      return;
+    }
+    let alive = true;
+    Promise.all(threadFolders.split("\n").map((id) => api.folderConversations(id)))
+      .then((all) => alive && setConversations(mergeConversations(all)))
+      .catch(() => alive && setConversations(null));
+    return () => {
+      alive = false;
+    };
+  }, [threaded, folderId, threadFolders, messages]);
+  const threads = useMemo(
+    () => (threaded && conversations ? threadRows(visible, conversations, expandedThreads) : null),
+    [threaded, conversations, visible, expandedThreads],
+  );
+  /** Lignes de la liste : les conversations, ou les messages à plat. */
+  const listed = threads?.rows ?? visible;
+  const toggleThread = (conversation: number) =>
+    setExpandedThreads((old) => {
+      const next = new Set(old);
+      if (!next.delete(conversation)) next.add(conversation);
+      return next;
+    });
+  /** Conversation du message sélectionné (lot U3) : ses messages du dossier et les envoyés, du plus ancien au plus récent. */
+  const threadMessages = useMemo(() => {
+    const info = single === null ? undefined : threads?.info.get(single);
+    if (!info || !threads) return null;
+    const own = (threads.members.get(info.conversation) ?? []).flatMap((id) => visible.filter((m) => m.id === id));
+    const sent = (conversations?.sent ?? []).filter((s) => s.conversation === info.conversation).map((s) => s.message);
+    return { messages: [...own, ...sent].sort((a, b) => a.date - b.date), sentIds: new Set(sent.map((m) => m.id)) };
+  }, [single, threads, visible, conversations]);
+  /** Messages sur lesquels agir : une conversation repliée l'est en entier (lot U2). */
+  const actionIds = useMemo(() => withConversations(selectedIds, threads), [selectedIds, threads]);
+
   const select = (id: number, mode: "single" | "toggle" | "range") => {
     if (mode === "toggle") {
       setSelectedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
       anchorId.current = id;
     } else if (mode === "range" && anchorId.current !== null) {
-      const a = visible.findIndex((m) => m.id === anchorId.current);
-      const b = visible.findIndex((m) => m.id === id);
+      const a = listed.findIndex((m) => m.id === anchorId.current);
+      const b = listed.findIndex((m) => m.id === id);
       if (a < 0 || b < 0) return setSelectedIds([id]);
       const [from, to] = a < b ? [a, b] : [b, a];
-      setSelectedIds(visible.slice(from, to + 1).map((m) => m.id));
+      setSelectedIds(listed.slice(from, to + 1).map((m) => m.id));
     } else {
       setSelectedIds([id]);
       anchorId.current = id;
@@ -729,7 +803,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
 
   const moveIdsToRole = (ids: number[], role: FolderRole, label: string) => runMove(ids, label, () => api.moveToRole(ids, role));
 
-  const moveToRole = (role: FolderRole, label: string) => moveIdsToRole(selectedIds, role, label);
+  const moveToRole = (role: FolderRole, label: string) => moveIdsToRole(actionIds, role, label);
 
   // ---------------------------------------------------------- recherche dans tous les dossiers
 
@@ -797,13 +871,17 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
   // Lu / indicateur : l'affichage ne change que si le backend a accepté
   // (audit B3), comme dans la fenêtre d'un message.
   const quickSeen = async (m: MessageSummary) => {
-    const seen = !m.flags.seen;
+    // Conversation repliée (lot U2) : toute lue s'il y reste un non lu, sinon toute non lue.
+    const ids = withConversations([m.id], threads);
+    const thread = threads?.info.get(m.id);
+    const seen = thread?.head && !thread.expanded ? thread.unread > 0 : !m.flags.seen;
+    const changed = visible.filter((x) => ids.includes(x.id) && x.flags.seen !== seen).length;
     await whenAccepted(
-      api.setSeen([m.id], seen),
+      api.setSeen(ids, seen),
       () => {
-        patchList((list) => withFlag(list, [m.id], "seen", seen));
+        patchList((list) => withFlag(list, ids, "seen", seen));
         setFolders((fs) =>
-          fs.map((f) => (f.id === m.folderId ? { ...f, unread: Math.max(0, f.unread + (seen ? -1 : 1)) } : f)),
+          fs.map((f) => (f.id === m.folderId ? { ...f, unread: Math.max(0, f.unread + (seen ? -changed : changed)) } : f)),
         );
       },
       fail,
@@ -813,10 +891,11 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
 
   const quickFlag = async (m: MessageSummary) => {
     const flagged = !m.flags.flagged;
+    const ids = withConversations([m.id], threads);
     await whenAccepted(
-      api.setFlagged([m.id], flagged),
+      api.setFlagged(ids, flagged),
       () => {
-        patchList((list) => withFlag(list, [m.id], "flagged", flagged));
+        patchList((list) => withFlag(list, ids, "flagged", flagged));
       },
       fail,
       refreshPending,
@@ -895,7 +974,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
     selectNext(next);
   };
 
-  const quickDelete = (m: MessageSummary) => deleteIds([m.id]);
+  const quickDelete = (m: MessageSummary) => deleteIds(withConversations([m.id], threads));
   /** Message (affiché) rangé dans « Éléments supprimés ». */
   const inTrash = (id: number) => {
     const m = (searchResults ?? messages).find((x) => x.id === id);
@@ -937,10 +1016,10 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
   };
 
   /** Clic droit › Restaurer : comme Supprimer, toute la sélection qui contient le message. */
-  const menuRestore = (m: MessageSummary) => restoreIds(selectedSet.has(m.id) ? selectedIds : [m.id]);
+  const menuRestore = (m: MessageSummary) => restoreIds(selectionWith(m));
 
   /** Clic droit › Supprimer : toute la sélection si le message en fait partie, sinon lui seul. */
-  const menuDelete = (m: MessageSummary) => deleteIds(selectedSet.has(m.id) ? selectedIds : [m.id]);
+  const menuDelete = (m: MessageSummary) => deleteIds(selectionWith(m));
 
   /** Règle préremplie depuis un message (clic droit), ouverte dans Paramètres › Règles. */
   const [ruleDraft, setRuleDraft] = useState<Rule | null>(null);
@@ -1054,9 +1133,9 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
 
   const toggleSeen = async () => {
     await whenAccepted(
-      api.setSeen(selectedIds, !allSeen),
+      api.setSeen(actionIds, !allSeen),
       () => {
-        patchList((list) => withFlag(list, selectedIds, "seen", !allSeen));
+        patchList((list) => withFlag(list, actionIds, "seen", !allSeen));
         void reloadFolders();
       },
       fail,
@@ -1065,7 +1144,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
   };
 
   /** Clic droit : la sélection si le message en fait partie, sinon lui seul. */
-  const selectionWith = (m: MessageSummary) => (selectedSet.has(m.id) ? selectedIds : [m.id]);
+  const selectionWith = (m: MessageSummary) => withConversations(selectedSet.has(m.id) ? selectedIds : [m.id], threads);
 
   /**
    * Clic droit › Déplacer : sous-menu avec les dossiers récents, la recherche
@@ -1146,34 +1225,63 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
 
   const toggleFlag = async () => {
     await whenAccepted(
-      api.setFlagged(selectedIds, !allFlagged),
+      api.setFlagged(actionIds, !allFlagged),
       () => {
-        patchList((list) => withFlag(list, selectedIds, "flagged", !allFlagged));
+        patchList((list) => withFlag(list, actionIds, "flagged", !allFlagged));
       },
       fail,
       refreshPending,
     );
   };
 
-  // Touche Suppr : vers les éléments supprimés du compte de chaque message.
-  // Seulement dans la vue Mail, sans paramètres ni fenêtre de dialogue ouverts :
-  // la sélection de mails reste en mémoire dans l'agenda ou les contacts, et
-  // Suppr ne doit pas l'envoyer à la corbeille à l'insu de l'utilisateur
-  // (relecture F5). Même confirmation que le bouton Supprimer (brouillons).
+  // Raccourcis clavier (lot V ; Suppr depuis le lot F5). Seulement dans la vue
+  // Mail, hors d'un champ de saisie, sans paramètres ni fenêtre de dialogue
+  // ouverts : la sélection de mails reste en mémoire dans l'agenda ou les
+  // contacts, et une lettre ne doit pas agir sur elle à l'insu de
+  // l'utilisateur (relecture F5).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.closest("input, textarea, [contenteditable], [role='dialog']")) return;
-      if (view !== "mail" || settingsOpen || dialog !== null) return;
-      if (e.key === "Delete" && selectedIds.length > 0) deleteIds(selectedIds);
+      if (target.closest("input, textarea, select, [contenteditable], [role='dialog'], [role='menu']")) return;
+      if (view !== "mail" || settingsOpen || dialog !== null || shortcutsOpen) return;
+      const id = shortcutFor(e);
+      if (id === null) return;
+      const some = selectedIds.length > 0;
+      const run: Partial<Record<ShortcutId, () => void>> = {
+        compose: startCompose,
+        reply: () => startReply("reply"),
+        replyAll: () => startReply("replyAll"),
+        forward: () => startReply("forward"),
+        seen: () => some && void toggleSeen(),
+        flag: () => some && void toggleFlag(),
+        archive: () => some && moveToRole("archive", t("Archive")),
+        delete: () => some && deleteIds(actionIds),
+        // Suivant, précédent : comme les flèches dans la liste (pages chargées au besoin).
+        next: () => listKey("ArrowDown"),
+        previous: () => listKey("ArrowUp"),
+        search: () => document.querySelector<HTMLInputElement>(".list-search input")?.focus(),
+        help: () => setShortcutsOpen(true),
+      };
+      const action = run[id];
+      if (!action) return;
+      e.preventDefault();
+      action();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  /** Touche transmise à la liste des messages, qui prend le focus. */
+  const listKey = (key: string) => {
+    const list = document.querySelector<HTMLElement>(".list-scroll[role='listbox']");
+    if (!list) return;
+    list.focus();
+    list.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+  };
+
   const startDrag = (id: number) => {
     // On glisse toute la sélection si l'élément en fait partie, sinon lui seul.
-    if (selectedSet.has(id)) setDraggingIds(selectedIds);
+    if (selectedSet.has(id)) setDraggingIds(actionIds);
     else {
       setSelectedIds([id]);
       setDraggingIds([id]);
@@ -1291,6 +1399,49 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
     );
   };
 
+  // ---------------------------------------------------------- messages programmés (lot W2)
+
+  const reloadScheduled = useCallback(() => {
+    api.scheduledList().then(setScheduled, () => {});
+  }, []);
+  useEffect(() => reloadScheduled(), [reloadScheduled]);
+  // Plus rien à envoyer : retour à la liste des messages.
+  useEffect(() => {
+    if (scheduled.length === 0) setShowScheduled(false);
+  }, [scheduled.length]);
+
+  /** Modifier : retiré du programme et rouvert dans la rédaction. */
+  const editScheduled = (item: ScheduledItem) => {
+    api.unschedule(item.id).then((m) => {
+      reloadScheduled();
+      if (!m) return notify(t("Déjà parti"), t("Ce message a été envoyé entre-temps."), "info");
+      openComposeWindow(failedInit(m.accountId, m.draft, m.attachments, m.answeredId, null, "")).catch(fail);
+    }, fail);
+  };
+
+  const sendScheduledNow = (item: ScheduledItem) => {
+    api.sendScheduledNow(item.id).then((done) => {
+      reloadScheduled();
+      if (done) notify(t("Envoi en cours…"), item.subject || t("(sans objet)"), "info");
+      else notify(t("Déjà parti"), t("Ce message a été envoyé entre-temps."), "info");
+    }, fail);
+  };
+
+  const deleteScheduled = (item: ScheduledItem) =>
+    setDialog(
+      <ConfirmDialog
+        title={t("Supprimer le message programmé")}
+        message={t("« {subject} » ne sera pas envoyé, et ne pourra pas être retrouvé.", { subject: item.subject || t("(sans objet)") })}
+        confirm={t("Supprimer")}
+        onConfirm={async () => {
+          await api.unschedule(item.id);
+          reloadScheduled();
+          notify(t("Message programmé supprimé"), item.subject || t("(sans objet)"), "info");
+        }}
+        onClose={() => setDialog(null)}
+      />,
+    );
+
   const deleteFolder = (f: Folder) =>
     setDialog(
       <ConfirmDialog
@@ -1361,7 +1512,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
 
   /** Ce message, ou toute la sélection s'il en fait partie, en `.eml` dans Téléchargements. */
   const exportMessages = async (m: MessageSummary) => {
-    const ids = selectedSet.has(m.id) ? selectedIds : [m.id];
+    const ids = selectionWith(m);
     try {
       const paths = await api.exportEml(ids);
       notify(
@@ -1535,6 +1686,28 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
     if (shown && (shown === sent?.id || shown === unifiedId("sent"))) void reloadMessages(shown);
   };
 
+  /**
+   * Envoi retenu par son délai (lot W1) : avis avec le temps restant et
+   * « Annuler », qui le rend à la rédaction tant qu'il n'est pas parti.
+   */
+  const announceHeldSend = (sendKey: string, delay: number) => {
+    const toastId = `send-${sendKey}`;
+    const cancel = () => {
+      dismissToast(toastId);
+      api.cancelSend(sendKey).then((done) => {
+        if (!done) notify(t("Trop tard pour annuler"), t("Le message est déjà parti."), "info");
+      }, fail);
+    };
+    dispatchToast(
+      <Toast>
+        <ToastTitle action={<Link onClick={cancel}>{t("Annuler")}</Link>}>
+          <SendCountdown seconds={delay} />
+        </ToastTitle>
+      </Toast>,
+      { toastId, intent: "info", timeout: delay * 1000 },
+    );
+  };
+
   /** Ce que signalent les fenêtres secondaires (envoi, déplacement, indicateurs). */
   const windowEventRef = useRef<(e: WindowEvent) => void>(() => {});
   windowEventRef.current = (e: WindowEvent) => {
@@ -1544,7 +1717,18 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
     }
     // Envoi en arrière-plan (lot E1) : la rédaction est déjà fermée.
     if (e.type === "sending") {
-      notify(t("Envoi en cours…"), undefined, "info");
+      if (e.held) announceHeldSend(e.held.sendKey, e.held.delay);
+      else notify(t("Envoi en cours…"), undefined, "info");
+      return;
+    }
+    // Envoi annulé pendant son délai (lot W1) : le message est rouvert, sans erreur.
+    if (e.type === "sendCancelled") {
+      notify(t("Envoi annulé"), t("Le message est rouvert pour le modifier ou l'envoyer plus tard."), "info");
+      openComposeWindow(failedInit(e.accountId, e.draft, e.attachments, e.answeredId, e.draftId, ""))
+        .then(() => api.clearDraftBackup(e.window))
+        .catch(() => {
+          // fenêtre non ouverte : la copie de secours reste proposée au prochain démarrage
+        });
       return;
     }
     if (e.type === "sendFailed") {
@@ -1565,6 +1749,12 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
       if (shown && role === "drafts") void reloadMessages(shown);
       // Compteurs de « Brouillons » (par compte et unifié) à jour tout de suite.
       void reloadFolders();
+      return;
+    }
+    // Messages programmés (lot W2) : liste relue ; confirmation à la programmation.
+    if (e.type === "scheduled") {
+      reloadScheduled();
+      if (e.sendAt) notify(t("Message programmé"), t("Envoi prévu {when}.", { when: longDate(e.sendAt) }), "success");
       return;
     }
     if (e.type === "moved") {
@@ -1674,6 +1864,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
         onAccount={showAccount}
         onToggleTheme={() => theme.setMode(theme.dark ? "light" : "dark")}
         onSettings={() => setSettingsOpen(true)}
+        onShortcuts={() => setShortcutsOpen(true)}
         view={view}
         onView={openView}
       />
@@ -1716,7 +1907,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
           <FolderPane
             accounts={focusAccount ? accounts.filter((a) => a.id === focusAccount) : accounts}
             folders={focusAccount ? folders.filter((f) => f.accountId === focusAccount) : folders}
-            selectedFolderId={folderId}
+            selectedFolderId={showScheduled ? SCHEDULED_ID : folderId}
+            scheduledCount={scheduled.length}
             draggingIds={draggingIds}
             accountErrors={accountErrors}
             loading={foldersLoading}
@@ -1729,6 +1921,8 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
             onAddAccount={() => setSettingsOpen(true)}
             onCompose={startCompose}
             onSelect={(id) => {
+              setShowScheduled(id === SCHEDULED_ID);
+              if (id === SCHEDULED_ID) return;
               setSearch("");
               setFolderId(id);
             }}
@@ -1753,11 +1947,22 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
             onMouseDown={startResize("folder")}
             onDoubleClick={() => setWidths((w) => ({ ...w, folder: 250 }))}
           />
+          {showScheduled ? (
+            <ScheduledList
+              items={scheduled}
+              accounts={accounts}
+              onEdit={editScheduled}
+              onSendNow={sendScheduledNow}
+              onDelete={deleteScheduled}
+            />
+          ) : (
           <MessageList
             folder={currentFolder}
             account={currentAccount}
             accounts={accounts}
-            messages={visible}
+            messages={listed}
+            threads={threads?.info}
+            onToggleThread={toggleThread}
             selectedIds={selectedIds}
             loading={syncingList}
             search={search}
@@ -1807,6 +2012,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
             onCreateRule={createRule}
             onExport={exportMessages}
           />
+          )}
           {layout !== "hidden" && (
           <div
             className={layout === "bottom" ? "splitter splitter-rows" : "splitter"}
@@ -1825,6 +2031,16 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
           )}
           {layout !== "hidden" && (
           <ReadingPane
+              thread={
+                threadMessages && (
+                  <ConversationStrip
+                    messages={threadMessages.messages}
+                    sentIds={threadMessages.sentIds}
+                    shownId={shownId}
+                    onPick={(id) => setPickedInThread(id === single ? null : id)}
+                  />
+                )
+              }
               message={current}
               loading={loadingMessage && !current}
               selectionCount={selectedIds.length}
@@ -1839,9 +2055,9 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
                   allFlagged={allFlagged}
                   onReply={startReply}
                   onArchive={() => moveToRole("archive", t("Archive"))}
-                  onDelete={() => deleteIds(selectedIds)}
-                  onRestore={selectedIds.length > 0 && selectedIds.every(inTrash) ? () => restoreIds(selectedIds) : undefined}
-                  onMove={(id) => moveTo(id, selectedIds)}
+                  onDelete={() => deleteIds(actionIds)}
+                  onRestore={selectedIds.length > 0 && selectedIds.every(inTrash) ? () => restoreIds(actionIds) : undefined}
+                  onMove={(id) => moveTo(id, actionIds)}
                   onToggleSeen={toggleSeen}
                   onToggleFlag={toggleFlag}
                   onPopOut={
@@ -1906,6 +2122,7 @@ function Shell({ theme }: { theme: ReturnType<typeof useThemeMode> }) {
       )}
       {dialog}
       {update.found && <UpdateDialog found={update.found} onLater={update.later} onSkip={update.skip} />}
+      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
       <Toaster toasterId={toasterId} position="bottom-end" />
     </div>
   );

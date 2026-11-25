@@ -136,7 +136,7 @@ export function RulesSection({ accounts, notify, initialRule = null }: Props) {
 
   return (
     <div className="settings-pane">
-      <h3 className="settings-pane-title">{t("Règles")}</h3>
+      <h3 className="settings-pane-title section-title">{t("Règles")}</h3>
       <div className="about-scroll">
         <p className="muted settings-hint rules-intro">
           {t(

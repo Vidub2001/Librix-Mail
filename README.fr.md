@@ -52,7 +52,7 @@ Les versions sont construites à partir de ce dépôt par GitHub Actions. Chacun
 
 Les fichiers Windows ne sont pas encore signés : Windows peut afficher un avertissement à la première installation.
 
-> **État :** version 0.3.9, utilisée tous les jours par son auteur. Les retours et signalements sont les bienvenus.
+> **État :** version 0.4.0, utilisée tous les jours par son auteur. Les retours et signalements sont les bienvenus.
 
 ## Fonctionnalités
 
@@ -64,6 +64,9 @@ Les fichiers Windows ne sont pas encore signés : Windows peut afficher un avert
   personnels O365, Gmail).
 - Boîtes unifiées (réception, envoyés, brouillons…) ou comptes séparés ; gestion complète des
   dossiers (créer, renommer, déplacer, supprimer, vider).
+- **Conversations** : messages d'une même discussion regroupés dans la liste (vos réponses
+  comprises), dépliables, et listés sous l'objet dans le volet de lecture ; à plat au choix,
+  partout ou par dossier.
 - Lecture : HTML isolé et sans script, images distantes bloquées par défaut, pièces jointes
   (ouverture, enregistrement), invitations d'agenda ajoutées, mises à jour ou retirées
   (annulation) en un clic ; réponse à l'organisateur (Accepter, Peut-être, Refuser), envoyée
@@ -76,9 +79,11 @@ Les fichiers Windows ne sont pas encore signés : Windows peut afficher un avert
 - Messages chiffrés en S/MIME : lus avec ce même certificat, déchiffrés en mémoire (rien en clair
   sur le disque) ; envoyés chiffrés avec le bouton « Chiffrer », grâce aux certificats des
   correspondants gardés sur leurs messages signés.
-- Rédaction : HTML ou texte simple (format par défaut réglable), signatures par compte (mise en forme et texte simple), réponses et
-  transferts, pièces jointes par glisser-déposer, brouillons enregistrés automatiquement,
+- Rédaction : HTML ou texte simple (format par défaut réglable), jusqu'à cinq signatures par compte (mise en forme et texte simple), modèles de messages,
+  **annulation de l'envoi** et **envoi programmé**, réponses et transferts, pièces jointes par glisser-déposer, brouillons enregistrés automatiquement,
   suggestions de destinataires, **avertissement de pièce jointe oubliée**.
+- Raccourcis clavier (répondre, transférer, lu, indicateur, archiver, message suivant…), listés
+  par la touche « ? ».
 - Déplacement et suppression entre comptes, avec journal : un déplacement interrompu (coupure
   réseau, fermeture) est repris au démarrage suivant, sans doublon ni perte. Clic droit ›
   « Déplacer » : dossiers récents, recherche parmi les dossiers de tous les comptes, ou nouveau
@@ -306,6 +311,10 @@ Les signalements et les contributions sont les bienvenus. Tout texte de l'interf
 modifié, passe par `t()` avec ses entrées dans `src/locales/en.ts` et `src/locales/es.ts` ; les
 textes produits par le backend Rust passent par `tr!` avec leurs entrées dans
 `src-tauri/src/locales/`.
+
+## Développement avec l'IA
+
+Librix Mail est développé avec une aide importante de l'IA générative : une grande partie du code et de la documentation est écrite avec Claude (Anthropic), et les commits concernés portent la ligne `Co-Authored-By: Claude`. Le mainteneur décide de ce qui est construit, découpe le travail en petits lots, relit et teste chaque lot avant de le fusionner, et répond du résultat. Chaque modification passe par les mêmes contrôles automatiques (`make audit` : tests, Clippy, Semgrep, audit des dépendances) et les analyseurs sont soumis au fuzzing ; le [modèle de menace](docs/MODELE-MENACE.md) et les [contrôles](docs/AUDIT.md) sont publics.
 
 ## Téléchargement et signature
 

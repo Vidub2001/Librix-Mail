@@ -436,3 +436,30 @@ export interface TestReport {
   imap: CheckResult;
   smtp: CheckResult;
 }
+
+/** Message rendu à la rédaction (envoi échoué ou annulé), ou gardé pour plus tard (lot W2). */
+export interface ReturnedMessage {
+  accountId: string;
+  draft: Draft;
+  attachments: AttachmentInput[];
+  answeredId: number | null;
+  draftId: number | null;
+  /** Fenêtre de rédaction d'où vient le message (sa copie de secours) ; vide pour un message programmé. */
+  window: string;
+}
+
+/** Message programmé (lot W2), tel que listé dans « À envoyer ». */
+export interface ScheduledItem {
+  id: number;
+  accountId: string;
+  /** Heure d'envoi, en secondes Unix. */
+  sendAt: number;
+  subject: string;
+  to: string[];
+}
+
+/** Conversations d'un dossier (lot U2) : numéro de chaque message, et messages envoyés qui en font partie. */
+export interface FolderConversations {
+  conversation: Record<string, number>;
+  sent: { conversation: number; message: MessageSummary }[];
+}

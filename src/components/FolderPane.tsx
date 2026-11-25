@@ -10,6 +10,7 @@ import {
   ArrowExport20Regular,
   ArrowImport20Regular,
   ArrowSync16Regular,
+  SendClock20Regular,
   ChevronDown16Regular,
   ChevronRight16Regular,
   Compose20Regular,
@@ -20,15 +21,19 @@ import {
   MoreHorizontal20Regular,
   Rename20Regular,
   Warning16Regular,
+  TextBulletListLtr20Regular,
+  TextBulletListTree20Regular,
 } from "@fluentui/react-icons";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Account, Folder } from "../types";
 import { UNIFIED_ROLES, members, unifiedFolder, unifiedId } from "../unified";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { loadGeneral, saveGeneral } from "../general";
 import { FolderIcon } from "./FolderIcon";
 import { LibrixSpinner } from "./LibrixSpinner";
 import { folderTree } from "../folder-tree";
 import { t } from "../i18n";
+import { withKeys } from "../shortcuts";
 
 interface Props {
   accounts: Account[];
@@ -59,7 +64,12 @@ interface Props {
   /** Pas de réseau : erreurs de connexion masquées, lecture depuis le cache. */
   offline: boolean;
   onDropMessages: (folderId: string, ids: number[]) => void;
+  /** Messages programmés (lot W2) : entrée « À envoyer » affichée s'il y en a. */
+  scheduledCount: number;
 }
+
+/** Identifiant de l'entrée « À envoyer » (lot W2) : pas un dossier d'un compte. */
+export const SCHEDULED_ID = "scheduled";
 
 const STORAGE_KEY = "librix.folderPane";
 
@@ -143,6 +153,17 @@ export function FolderPane(p: Props) {
         onClick: () => p.onEmptyFolders([f], f.name),
       });
     }
+    // Lot U2 : ce dossier en conversations ou à plat, si le réglage général les active.
+    const general = loadGeneral();
+    if (general.conversations) {
+      const flat = general.flatFolders.includes(f.id);
+      items.push({
+        label: flat ? t("Afficher en conversations") : t("Afficher à plat, sans conversations"),
+        icon: flat ? <TextBulletListTree20Regular /> : <TextBulletListLtr20Regular />,
+        onClick: () =>
+          saveGeneral({ flatFolders: flat ? general.flatFolders.filter((id) => id !== f.id) : [...general.flatFolders, f.id] }),
+      });
+    }
     items.push(
       { label: t("Importer des messages (.eml, .mbox)…"), icon: <ArrowImport20Regular />, onClick: () => p.onImportMessages(f) },
       { label: t("Exporter le dossier (.mbox)"), icon: <ArrowExport20Regular />, disabled: f.total === 0, onClick: () => p.onExportFolder(f) },
@@ -218,12 +239,14 @@ export function FolderPane(p: Props) {
     icon: ReactNode;
     title?: string;
     menu?: ContextMenuItem[];
+    /** Compteur affiché à la place de celui du dossier. */
+    count?: number;
   }) => {
     const hint = opts.folder.subscribed ? opts.title : t("{name} — non abonné (masqué en vue unifiée)", { name: opts.folder.name });
     const { folder: f } = opts;
     const selected = f.id === p.selectedFolderId;
     const canDrop = p.draggingIds.length > 0 && opts.dropId !== null;
-    const n = count(f);
+    const n = opts.count ?? count(f);
     const classes = [
       "folder-row",
       selected && "selected",
@@ -339,7 +362,14 @@ export function FolderPane(p: Props) {
   return (
     <nav className="folder-pane" aria-label={t("Dossiers")}>
       <div className="folder-pane-header">
-        <Button appearance="primary" className="compose-btn" icon={<Compose20Regular />} onClick={p.onCompose}>
+        <Button
+          appearance="primary"
+          className="compose-btn"
+          icon={<Compose20Regular />}
+          onClick={p.onCompose}
+          title={withKeys(t("Nouveau message"), "compose")}
+          aria-keyshortcuts="Control+N"
+        >
           {t("Nouveau courrier")}
         </Button>
         <span className="folder-pane-actions">
@@ -469,6 +499,30 @@ export function FolderPane(p: Props) {
               })}
           </section>
         )}
+
+        {/* Messages programmés (lot W2) : seulement s'il y en a. */}
+        {p.scheduledCount > 0 &&
+          row({
+            key: SCHEDULED_ID,
+            folder: {
+              id: SCHEDULED_ID,
+              accountId: "",
+              name: t("À envoyer"),
+              path: "",
+              parentId: null,
+              depth: 0,
+              role: "custom",
+              unread: 0,
+              total: p.scheduledCount,
+              subscribed: true,
+            },
+            label: t("À envoyer"),
+            indent: 0,
+            dropId: null,
+            icon: <SendClock20Regular />,
+            title: t("Messages programmés, envoyés à l'heure choisie"),
+            count: p.scheduledCount,
+          })}
 
         {p.accounts.map((account) => {
           const open = isOpen(account.id);

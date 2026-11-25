@@ -19,6 +19,7 @@
     "allow-discard-draft",
     "allow-open-draft",
     "allow-send-message",
+    "allow-schedule-send",
     "allow-smime-signers",
     "allow-smime-missing",
     "allow-window-bootstrap",

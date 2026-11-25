@@ -125,7 +125,21 @@ pub(crate) enum WindowEvent {
     #[serde(rename_all = "camelCase")]
     Sending {
         account_id: String,
+        /// Envoi retenu pour pouvoir être annulé (lot W1) ; absent si le
+        /// message part aussitôt.
+        #[serde(default)]
+        held: Option<HeldSend>,
     },
+}
+
+/// Envoi retenu par son délai (lot W1), annoncé à la fenêtre principale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HeldSend {
+    /// Clé d'envoi du message, pour `cancel_send`.
+    send_key: String,
+    /// Délai en secondes.
+    delay: u32,
 }
 
 /// Compte rendu d'envoi relayé à la fenêtre principale (textes bornés).
@@ -148,7 +162,14 @@ fn valid_event(event: &WindowEvent) -> bool {
         }
         WindowEvent::Moved { ids } | WindowEvent::Flags { ids } => ids.len() <= MAX_EVENT_IDS,
         WindowEvent::Draft => true,
-        WindowEvent::Sending { account_id } => account_id.chars().count() <= MAX_EVENT_TEXT,
+        WindowEvent::Sending { account_id, held } => {
+            // Délai borné comme celui du backend (lot W1) : l'avis « Envoi dans … »
+            // d'une fenêtre de rédaction ne reste pas affiché des heures.
+            account_id.chars().count() <= MAX_EVENT_TEXT
+                && held.as_ref().is_none_or(|h| {
+                    h.send_key.chars().count() <= MAX_EVENT_TEXT && u64::from(h.delay) <= crate::outbox::MAX_DELAY.as_secs()
+                })
+        }
     }
 }
 
@@ -158,13 +179,12 @@ impl From<&crate::router::SendReport> for SentReport {
     }
 }
 
-/// Envoi fait en arrière-plan qui a échoué (lot E1) : émis par le backend seul,
-/// jamais accepté d'une fenêtre (ce n'est pas un `WindowEvent`). La fenêtre
-/// principale rouvre la rédaction avec le message et l'erreur.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename = "sendFailed", rename_all = "camelCase")]
-pub(crate) struct SendFailed {
-    pub(crate) error: String,
+/// Message confié à l'envoi en arrière-plan et rendu à la rédaction, faute
+/// d'être parti (échec, ou annulation pendant son délai) ; aussi la forme
+/// d'un message programmé dans le cache (lot W2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Returned {
     pub(crate) account_id: String,
     pub(crate) draft: mail_core::Draft,
     pub(crate) attachments: Vec<crate::router::AttachmentInput>,
@@ -172,6 +192,26 @@ pub(crate) struct SendFailed {
     pub(crate) draft_id: Option<u64>,
     /// Fenêtre de rédaction d'où vient le message : sa copie de secours.
     pub(crate) window: String,
+}
+
+/// Envoi fait en arrière-plan qui a échoué (lot E1) : émis par le backend seul,
+/// jamais accepté d'une fenêtre (ce n'est pas un `WindowEvent`). La fenêtre
+/// principale rouvre la rédaction avec le message et l'erreur.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename = "sendFailed")]
+pub(crate) struct SendFailed {
+    pub(crate) error: String,
+    #[serde(flatten)]
+    pub(crate) message: Returned,
+}
+
+/// Envoi annulé par l'utilisateur pendant son délai (lot W1) : émis par le
+/// backend seul. La fenêtre principale rouvre la rédaction, sans erreur.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename = "sendCancelled")]
+pub(crate) struct SendCancelled {
+    #[serde(flatten)]
+    pub(crate) message: Returned,
 }
 
 /// Résultat d'un envoi en arrière-plan, pour la fenêtre principale.
@@ -185,6 +225,26 @@ pub(crate) fn send_succeeded(app: &AppHandle, report: &crate::router::SendReport
 /// Échec d'un envoi en arrière-plan, pour la fenêtre principale.
 pub(crate) fn send_failed(app: &AppHandle, failed: SendFailed) {
     if let Err(e) = app.emit_to(MAIN, WINDOW_EVENT, failed) {
+        crate::diag::report(&e);
+    }
+}
+
+/// La liste des messages programmés a changé (lot W2) : la fenêtre principale
+/// la relit ; `send_at`, l'heure d'un message qui vient d'être programmé.
+pub(crate) fn scheduled_changed(app: &AppHandle, send_at: Option<i64>) {
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(tag = "type", rename = "scheduled", rename_all = "camelCase")]
+    struct ScheduledChanged {
+        send_at: Option<i64>,
+    }
+    if let Err(e) = app.emit_to(MAIN, WINDOW_EVENT, ScheduledChanged { send_at }) {
+        crate::diag::report(&e);
+    }
+}
+
+/// Envoi annulé pendant son délai (lot W1), pour la fenêtre principale.
+pub(crate) fn send_cancelled(app: &AppHandle, cancelled: SendCancelled) {
+    if let Err(e) = app.emit_to(MAIN, WINDOW_EVENT, cancelled) {
         crate::diag::report(&e);
     }
 }
@@ -478,8 +538,7 @@ mod tests {
         let sending: WindowEvent = serde_json::from_str(r#"{"type":"sending","accountId":"a"}"#).unwrap();
         assert!(valid_event(&sending));
         assert!(serde_json::from_str::<WindowEvent>(r#"{"type":"sendFailed","error":"x"}"#).is_err());
-        let failed = super::SendFailed {
-            error: "refus".into(),
+        let message = super::Returned {
             account_id: "a".into(),
             draft: mail_core::Draft::default(),
             attachments: Vec::new(),
@@ -487,13 +546,23 @@ mod tests {
             draft_id: Some(3),
             window: "compose-1".into(),
         };
+        let failed = super::SendFailed { error: "refus".into(), message: message.clone() };
         let json = serde_json::to_value(&failed).unwrap();
         assert_eq!((json["type"].as_str(), json["draftId"].as_u64()), (Some("sendFailed"), Some(3)));
+        // Lot W1 : l'annulation est un événement à part, sans erreur.
+        let json = serde_json::to_value(super::SendCancelled { message }).unwrap();
+        assert_eq!((json["type"].as_str(), json["window"].as_str()), (Some("sendCancelled"), Some("compose-1")));
+        assert!(json.get("error").is_none(), "pas d'erreur pour une annulation voulue");
         let long = format!(
             r#"{{"type":"sent","report":{{"recipients":1,"savedIn":null,"warning":"{}"}},"accountId":"a","answeredId":null}}"#,
             "x".repeat(600)
         );
         assert!(!valid_event(&serde_json::from_str(&long).unwrap()));
+        // Lot W1 : délai d'annulation au plus 30 s.
+        let held = |delay: u32| format!(r#"{{"type":"sending","accountId":"a","held":{{"sendKey":"k","delay":{delay}}}}}"#);
+        assert!(valid_event(&serde_json::from_str(&held(30)).unwrap()), "30 s acceptées");
+        assert!(!valid_event(&serde_json::from_str(&held(31)).unwrap()), "au-delà, refusé");
+        assert!(valid_event(&serde_json::from_str(r#"{"type":"sending","accountId":"a"}"#).unwrap()), "envoi immédiat, sans délai");
     }
 
     #[test]

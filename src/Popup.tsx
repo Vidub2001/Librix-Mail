@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { api, runningInTauri } from "./api";
 import { t } from "./i18n";
+import { loadSettings } from "./settings";
 import { answerInvitation, applyInvitation } from "./invitation";
 import { ActionBar } from "./components/ActionBar";
 import { ConfirmDialog } from "./components/Dialogs";
@@ -231,10 +232,36 @@ function ComposeWindow({ composeKey, draftId }: { composeKey: string; draftId: n
     // Envoi en arrière-plan (lot E1) : la fenêtre se ferme dès que le backend a
     // le message ; la fenêtre principale annonce le résultat, ou rouvre le
     // message si l'envoi échoue.
-    await api.sendMessage(accountId, d, answeredId, attachments, savedDraft);
+    // Délai pour annuler l'envoi (lot W1, Paramètres › Courrier).
+    const sendKey = d.sendKey;
+    const delay = sendKey ? loadSettings().undoSendSeconds : 0;
+    await api.sendMessage(accountId, d, answeredId, attachments, savedDraft, delay);
     // Aperçu navigateur : la maquette annonce elle-même « en cours » puis le
     // résultat, dans cet ordre (la fenêtre se ferme juste après).
-    if (runningInTauri) await notifyMain({ type: "sending", accountId });
+    if (runningInTauri) {
+      await notifyMain(sendKey && delay > 0 ? { type: "sending", accountId, held: { sendKey, delay } } : { type: "sending", accountId });
+    }
+    await closeThisWindow();
+  };
+
+  /**
+   * Envoyer plus tard (lot W2) : le message attend dans Librix Mail ; son
+   * brouillon sur le serveur est supprimé (décision du 24 novembre 2026 : pas
+   * de second envoi en le rouvrant d'un autre poste).
+   */
+  const schedule = async (
+    accountId: string,
+    d: Draft,
+    answeredId: number | null,
+    attachments: AttachmentInput[],
+    savedDraft: number | null,
+    sendAt: number,
+  ) => {
+    await api.scheduleSend(accountId, d, answeredId, attachments, sendAt);
+    if (savedDraft !== null) {
+      await api.discardDraft(savedDraft).catch(() => {});
+      await notifyMain({ type: "draft" });
+    }
     await closeThisWindow();
   };
 
@@ -248,7 +275,7 @@ function ComposeWindow({ composeKey, draftId }: { composeKey: string; draftId: n
 
   return (
     <>
-      <Compose key={draft.key} init={draft} accounts={accounts} onSend={send} onDiscard={discard} />
+      <Compose key={draft.key} init={draft} accounts={accounts} onSend={send} onDiscard={discard} onSchedule={schedule} />
       {toaster}
     </>
   );

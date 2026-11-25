@@ -52,7 +52,7 @@ Releases are built from this repository by GitHub Actions. Each one comes with `
 
 Windows files are not signed yet, so Windows may show a warning on first install.
 
-> **Status:** version 0.3.9, used every day by its author. Feedback and bug reports are welcome.
+> **Status:** version 0.4.0, used every day by its author. Feedback and bug reports are welcome.
 
 ## Features
 
@@ -64,6 +64,9 @@ Windows files are not signed yet, so Windows may show a warning on first install
   accounts, Gmail).
 - Unified folders (Inbox, Sent, Drafts…) or separate accounts; full folder management (create,
   rename, move, delete, empty).
+- **Conversations**: messages from the same discussion grouped in the list (your replies
+  included), expandable, and listed under the subject in the reading pane; flat if you prefer,
+  everywhere or per folder.
 - Reading: sandboxed HTML with no scripts, remote images blocked by default, attachments (open,
   save), calendar invitations added, updated or
   removed (cancellation) in one click; reply to the organizer (Accept, Maybe, Decline), sent or
@@ -76,9 +79,10 @@ Windows files are not signed yet, so Windows may show a warning on first install
 - S/MIME-encrypted messages: read with the same certificate, decrypted in memory (nothing in
   plain text on disk); sent encrypted with the “Encrypt” button, using the correspondents'
   certificates kept from their signed messages.
-- Writing: HTML or plain text (default format configurable), per-account signatures (formatted and plain text), reply and
-  forward, drag-and-drop attachments, automatic draft saving, recipient suggestions,
+- Writing: HTML or plain text (default format configurable), up to five signatures per account (formatted and plain text), message templates,
+  **undo send** and **send later**, reply and forward, drag-and-drop attachments, automatic draft saving, recipient suggestions,
   **forgotten-attachment warning**.
+- Keyboard shortcuts (reply, forward, read, flag, archive, next message…), listed with the “?” key.
 - Moving and deleting across accounts, with a journal: an interrupted move (network loss, app
   closed) is resumed at next start-up, without duplicates or loss. Right-click › “Move”: recent
   folders, search across the folders of every account, or a new folder in the chosen account.
@@ -294,6 +298,10 @@ Next:
 Issues and pull requests are welcome. Any new or changed interface text must go through `t()`
 with entries in `src/locales/en.ts` and `src/locales/es.ts`; texts produced by the Rust backend go
 through `tr!` with entries in `src-tauri/src/locales/`.
+
+## Development with AI
+
+Librix Mail is developed with substantial help from generative AI: much of the code and documentation is written with Claude (Anthropic), and the commits concerned carry a `Co-Authored-By: Claude` line. The maintainer decides what is built, splits the work into small batches, reviews and tests each batch before merging it, and answers for the result. Every change goes through the same automated checks (`make audit`: tests, Clippy, Semgrep, dependency audit) and the parsers are fuzzed; the [threat model](docs/MODELE-MENACE.en.md) and the [checks](docs/AUDIT.en.md) are public.
 
 ## Downloads and code signing
 

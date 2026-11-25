@@ -1,37 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type {
-  Account,
-  AccountConfig,
-  AttachmentInput,
-  CalEvent,
-  Contact,
-  CorrespondentInfo,
-  Detected,
-  Draft,
-  DraftContent,
-  FlushReport,
-  FolderListing,
-  FolderRole,
-  ImportReport,
-  Invitation,
-  InvitationAnswer,
-  Message,
-  MessageSummary,
-  MoveReport,
-  NewVersion,
-  RestoreReport,
-  PimCollection,
-  PimSyncReport,
-  PrefetchReport,
-  RecipientCheck,
-  SavedDraft,
-  SearchReport,
-  Security,
-  SigningAccount,
-  SmimeIdentity,
-  Suggestion,
-  TestReport,
-} from "./types";
+import type { Account, AccountConfig, AttachmentInput, CalEvent, Contact, CorrespondentInfo, Detected, Draft, DraftContent, FlushReport, FolderListing, FolderRole, ImportReport, Invitation, InvitationAnswer, Message, MessageSummary, MoveReport, NewVersion, RestoreReport, PimCollection, PimSyncReport, PrefetchReport, RecipientCheck, SavedDraft, SearchReport, Security, SigningAccount, SmimeIdentity, Suggestion, TestReport, ReturnedMessage, ScheduledItem, FolderConversations } from "./types";
 import type { ListSync } from "./lists";
 import type * as Mock from "./mock";
 
@@ -82,6 +50,8 @@ export const api = {
     inTauri ? invoke("sync_folders") : mock.listFolders(),
 
   /** Messages en cache : immédiat, même hors ligne. */
+  folderConversations: (folderId: string): Promise<FolderConversations> =>
+    inTauri ? invoke("folder_conversations", { folderId }) : mock.folderConversations(folderId),
   listMessages: (folderId: string): Promise<MessageSummary[]> =>
     inTauri ? invoke("list_messages", { folderId }) : mock.listMessages(folderId),
 
@@ -213,7 +183,8 @@ export const api = {
   /**
    * Envoi en arrière-plan (lot E1) : rend la main une fois le message vérifié ;
    * le résultat arrive à la fenêtre principale (événements `sent` ou `sendFailed`).
-   * `draftId` : brouillon à supprimer après l'envoi.
+   * `draftId` : brouillon à supprimer après l'envoi ; `delay` : secondes pendant
+   * lesquelles l'envoi peut être annulé (`cancelSend`, lot W1).
    */
   sendMessage: (
     accountId: string,
@@ -221,10 +192,41 @@ export const api = {
     answeredId: number | null,
     attachments: AttachmentInput[],
     draftId: number | null = null,
+    delay = 0,
   ): Promise<void> =>
     inTauri
-      ? invoke("send_message", { accountId, draft, answeredId, attachments, draftId })
-      : mock.sendMessage(accountId, draft, answeredId, attachments, draftId),
+      ? invoke("send_message", { accountId, draft, answeredId, attachments, draftId, delay })
+      : mock.sendMessage(accountId, draft, answeredId, attachments, draftId, delay),
+
+  /**
+   * Programme un message pour `sendAt` (secondes Unix, lot W2) ; refusé pour un
+   * message à chiffrer. Rend son numéro dans « À envoyer ».
+   */
+  scheduleSend: (
+    accountId: string,
+    draft: Draft,
+    answeredId: number | null,
+    attachments: AttachmentInput[],
+    sendAt: number,
+  ): Promise<number> =>
+    inTauri
+      ? invoke("schedule_send", { accountId, draft, answeredId, attachments, sendAt })
+      : mock.scheduleSend(accountId, draft, answeredId, attachments, sendAt),
+
+  /** Messages programmés, du plus proche au plus lointain (lot W2). */
+  scheduledList: (): Promise<ScheduledItem[]> => (inTauri ? invoke("scheduled_list") : mock.scheduledList()),
+
+  /** Retire un message programmé et le rend (pour le modifier) ; `null` s'il est déjà parti. */
+  unschedule: (id: number): Promise<ReturnedMessage | null> =>
+    inTauri ? invoke("unschedule", { id }) : mock.unschedule(id),
+
+  /** Envoie tout de suite un message programmé ; `false` s'il est déjà parti. */
+  sendScheduledNow: (id: number): Promise<boolean> =>
+    inTauri ? invoke("send_scheduled_now", { id }) : mock.sendScheduledNow(id),
+
+  /** Annule un envoi encore retenu par son délai (lot W1) ; `false` s'il est déjà parti. */
+  cancelSend: (sendKey: string): Promise<boolean> =>
+    inTauri ? invoke("cancel_send", { sendKey }) : mock.cancelSend(sendKey),
 
   /** Enregistre le brouillon dans « Brouillons » (remplace `replace`). */
   saveDraft: (

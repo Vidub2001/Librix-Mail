@@ -1,6 +1,7 @@
 import { Button } from "@fluentui/react-components";
 import {
   CalendarLtr24Regular,
+  QuestionCircle24Regular,
   Mail24Filled,
   PeopleList24Regular,
   Settings24Regular,
@@ -10,6 +11,7 @@ import {
 import logo from "../assets/logo.png";
 import type { Account } from "../types";
 import { t } from "../i18n";
+import { withKeys } from "../shortcuts";
 
 interface Props {
   accounts: Account[];
@@ -21,6 +23,8 @@ interface Props {
   onAccount: (accountId: string) => void;
   onToggleTheme: () => void;
   onSettings: () => void;
+  /** Fenêtre d'aide des raccourcis clavier (lot V). */
+  onShortcuts: () => void;
   /** Vue affichée : courrier, agenda ou contacts. */
   view: "mail" | "calendar" | "contacts";
   onView: (view: "calendar" | "contacts") => void;
@@ -78,6 +82,15 @@ export function NavRail(p: Props) {
         title={t("Contacts")}
         aria-label={t("Contacts")}
         onClick={() => p.onView("contacts")}
+      />
+      <Button
+        appearance="subtle"
+        className="navrail-btn"
+        icon={<QuestionCircle24Regular />}
+        title={withKeys(t("Raccourcis clavier"), "help")}
+        aria-label={t("Raccourcis clavier")}
+        aria-keyshortcuts="?"
+        onClick={p.onShortcuts}
       />
       <Button
         appearance="subtle"

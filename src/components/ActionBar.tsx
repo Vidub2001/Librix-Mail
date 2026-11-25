@@ -33,6 +33,7 @@ import { Fragment } from "react";
 import type { Account, Folder } from "../types";
 import { FolderIcon } from "./FolderIcon";
 import { t } from "../i18n";
+import { shortcut, withKeys, type ShortcutId } from "../shortcuts";
 
 interface Props {
   accounts: Account[];
@@ -193,7 +194,10 @@ export function ActionBar(p: Props) {
                 icon={item.icon}
                 disabled={item.disabled}
                 onClick={item.onClick}
-                title={item.label}
+                // Raccourci clavier dans l'infobulle (lot V) ; le nom du bouton reste son libellé.
+                aria-label={item.label}
+                aria-keyshortcuts={shortcut(item.id)?.aria}
+                title={shortcut(item.id) ? withKeys(item.label, item.id as ShortcutId) : item.label}
               >
                 {p.compact ? null : item.label}
               </ToolbarButton>

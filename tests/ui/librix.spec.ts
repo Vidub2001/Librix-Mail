@@ -30,6 +30,11 @@ async function write(compose: Page, to: string, subject: string, body: string) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // Envoi immédiat dans les tests (lot W1 : 10 s par défaut), sauf ceux du délai,
+  // qui le règlent eux-mêmes ; réglages déjà enregistrés laissés tels quels.
+  await page.context().addInitScript(() => {
+    if (localStorage.getItem("librix.mail") === null) localStorage.setItem("librix.mail", JSON.stringify({ undoSendSeconds: 0 }));
+  });
   await page.goto("/");
 });
 
@@ -259,7 +264,8 @@ test("T : Paramètres › Général, réglages courts côte à côte", async ({ 
     ["Rédaction", "Contacts"],
   ];
   for (const [a, b] of pairs) {
-    expect(Math.abs((await top(a)) - (await top(b))), `${a} et ${b} sur la même ligne`).toBeLessThan(4);
+    // Mesure répétée : pendant l'animation d'ouverture du dialogue, les positions bougent encore.
+    await expect.poll(async () => Math.abs((await top(a)) - (await top(b))), { message: `${a} et ${b} sur la même ligne` }).toBeLessThan(4);
     expect(await left(b), `${b} à droite de ${a}`).toBeGreaterThan(await left(a));
   }
   // Rédaction et Contacts de même largeur.
@@ -301,7 +307,7 @@ test("T : signatures mise en forme et en texte simple, chacune dans son format",
   await settings.getByLabel("Signature en texte simple (messages en texte brut)").fill("Camille, signature texte");
   await settings.getByRole("radio", { name: "HTML" }).click();
   await expect(settings.getByRole("textbox", { name: "Signature mise en forme (messages en HTML)" })).toContainText("Camille, signature mise en forme");
-  await settings.getByRole("button", { name: "Enregistrer la signature" }).click();
+  await settings.getByRole("button", { name: "Enregistrer les signatures" }).click();
   await expect(settings.getByText("Enregistrée")).toBeVisible();
   await settings.getByRole("button", { name: "Fermer" }).click();
 
@@ -311,6 +317,255 @@ test("T : signatures mise en forme et en texte simple, chacune dans son format",
   await compose.getByRole("radio", { name: "Texte" }).click();
   await expect(body).toContainText("Camille, signature texte");
   await expect(body).not.toContainText("mise en forme");
+});
+
+test("T2 : signature collée en code HTML, nettoyée en revenant à la mise en forme", async ({ page }) => {
+  await page.getByRole("button", { name: "Comptes et paramètres" }).click();
+  const settings = page.getByRole("dialog", { name: "Paramètres" });
+  await settings.getByRole("button", { name: "Courrier" }).click();
+  await settings.getByRole("button", { name: "Code HTML" }).click();
+  await settings
+    .getByLabel("Code HTML de la signature")
+    .fill('<p><b>Camille Martin</b><br><a href="https://exemple.fr">exemple.fr</a></p><script>alert(1)</script><img src="https://pisteur.example/p.png">');
+  await settings.getByRole("button", { name: "Code HTML" }).click();
+  const html = settings.getByRole("textbox", { name: "Signature mise en forme (messages en HTML)" });
+  await expect(html.locator("b")).toHaveText("Camille Martin");
+  await expect(html.getByRole("link", { name: "exemple.fr" })).toBeVisible();
+  await expect(html.locator("script, img")).toHaveCount(0);
+});
+
+test("T3 : signature d'office selon le type de message, et bouton « Signature » de la rédaction", async ({ context, page }) => {
+  await page.getByRole("button", { name: "Comptes et paramètres" }).click();
+  const settings = page.getByRole("dialog", { name: "Paramètres" });
+  await settings.getByRole("button", { name: "Courrier" }).click();
+  await settings.getByRole("textbox", { name: "Signature mise en forme (messages en HTML)" }).click();
+  await page.keyboard.type("Camille, signature T3");
+  await settings.getByRole("button", { name: "Enregistrer les signatures" }).click();
+  await settings.getByRole("checkbox", { name: "réponses", exact: true }).uncheck();
+  await expect(settings.getByRole("checkbox", { name: "transferts", exact: true })).toBeChecked();
+  await settings.getByRole("button", { name: "Fermer" }).click();
+
+  await page.getByText("Repas de dimanche").click();
+  const [reply] = await Promise.all([
+    context.waitForEvent("page"),
+    page.getByRole("button", { name: "Répondre", exact: true }).first().click(),
+  ]);
+  const body = reply.getByLabel("Corps du message");
+  await expect(body).toContainText("On se retrouve à 12 h 30 dimanche ?");
+  await expect(body).not.toContainText("Camille, signature T3");
+  // Insérée à la demande, une seule fois même en cliquant deux fois.
+  await reply.getByRole("button", { name: "Insérer la signature" }).click();
+  await expect(body).toContainText("Camille, signature T3");
+  await reply.getByRole("button", { name: "Insérer la signature" }).click();
+  await expect(body.locator("[data-signature]")).toHaveCount(1);
+});
+
+test("T4 : plusieurs signatures par compte, celle par défaut ajoutée d'office, les autres au choix", async ({ context, page }) => {
+  await page.getByRole("button", { name: "Comptes et paramètres" }).click();
+  const settings = page.getByRole("dialog", { name: "Paramètres" });
+  await settings.getByRole("button", { name: "Courrier" }).click();
+  const editor = settings.getByRole("textbox", { name: "Signature mise en forme (messages en HTML)" });
+  await editor.click();
+  await page.keyboard.type("Camille, signature perso");
+  await settings.getByRole("button", { name: "Renommer cette signature" }).click();
+  await settings.getByLabel("Nom de la signature").fill("Perso");
+  await page.keyboard.press("Enter");
+  await settings.getByRole("button", { name: "Nouvelle signature" }).click();
+  await expect(editor).toHaveText("");
+  await editor.click();
+  await page.keyboard.type("Camille Martin, société");
+  // Renommer par double-clic dans la liste.
+  await settings.getByRole("listbox", { name: "Signatures du compte" }).getByRole("option", { name: "Signature 2", exact: true }).dblclick();
+  await settings.getByLabel("Nom de la signature").fill("Pro");
+  await page.keyboard.press("Enter");
+  await settings.getByRole("button", { name: "Signature par défaut" }).click();
+  // Revenir à la première : son contenu est gardé.
+  const list = settings.getByRole("listbox", { name: "Signatures du compte" });
+  await list.getByRole("option", { name: "Perso", exact: true }).click();
+  await expect(editor).toHaveText("Camille, signature perso");
+  await settings.getByRole("button", { name: "Enregistrer les signatures" }).click();
+  await expect(settings.getByText("Enregistrée")).toBeVisible();
+  // Cinq au plus.
+  for (let i = 0; i < 3; i++) await settings.getByRole("button", { name: "Nouvelle signature" }).click();
+  await expect(list.getByRole("option")).toHaveCount(5);
+  await expect(settings.getByRole("button", { name: "Nouvelle signature" })).toBeDisabled();
+  await settings.getByRole("button", { name: "Fermer" }).click();
+
+  const compose = await newMail(context, page);
+  const body = compose.getByLabel("Corps du message");
+  await expect(body).toContainText("Camille Martin, société");
+  await compose.getByRole("button", { name: "Insérer une signature" }).click();
+  await compose.getByRole("menuitem", { name: "Perso" }).click();
+  await expect(body).toContainText("Camille, signature perso");
+  await expect(body).not.toContainText("société");
+  await expect(body.locator("[data-signature]")).toHaveCount(1);
+});
+
+test("T5 : rubrique Sécurité avec les certificats S/MIME, plus dans Courrier", async ({ page }) => {
+  await page.getByRole("button", { name: "Comptes et paramètres" }).click();
+  const settings = page.getByRole("dialog", { name: "Paramètres" });
+  await settings.getByRole("button", { name: "Courrier" }).click();
+  await expect(settings.locator("legend", { hasText: "Pièces jointes" })).toBeVisible();
+  await expect(settings.locator("legend", { hasText: "Certificats des correspondants (S/MIME)" })).toHaveCount(0);
+  await settings.getByRole("button", { name: "Sécurité" }).click();
+  await expect(settings.locator("legend", { hasText: "Signature S/MIME de vos messages" })).toBeVisible();
+  await expect(settings.locator("legend", { hasText: "Certificats des correspondants (S/MIME)" })).toBeVisible();
+  await expect(settings.getByLabel("Compte", { exact: true })).toBeVisible();
+});
+
+test("V : raccourcis clavier de la liste, du volet de lecture et de l'aide", async ({ context, page }) => {
+  await page.getByText("Repas de dimanche").click();
+  const list = page.getByRole("listbox", { name: "Messages" });
+  const selected = list.locator("[role='option'][aria-selected='true']");
+  await expect(selected).toContainText("Repas de dimanche");
+  // J et K : message suivant, puis précédent.
+  await page.keyboard.press("j");
+  await expect(selected).toHaveCount(1);
+  await expect(selected).not.toContainText("Repas de dimanche");
+  await page.keyboard.press("k");
+  await expect(selected).toContainText("Repas de dimanche");
+  // R : réponse au message ouvert, une fois affiché dans le volet de lecture.
+  await expect(page.frameLocator("iframe").first().locator("body")).toContainText("On se retrouve à 12 h 30 dimanche ?");
+  const [reply] = await Promise.all([context.waitForEvent("page"), page.keyboard.press("r")]);
+  await expect(reply.getByLabel("Corps du message")).toContainText("On se retrouve à 12 h 30 dimanche ?");
+  await reply.close();
+  // « ? » : aide, fermée par Échap.
+  await page.keyboard.press("?");
+  const help = page.getByRole("dialog", { name: "Raccourcis clavier" });
+  await expect(help).toBeVisible();
+  await expect(help).toContainText("Répondre à tous");
+  await page.keyboard.press("Escape");
+  await expect(help).toHaveCount(0);
+  // Aussi par le bouton de la colonne de gauche.
+  await page.getByRole("button", { name: "Raccourcis clavier" }).click();
+  await expect(help).toBeVisible();
+  await help.getByRole("button", { name: "Fermer" }).click();
+  await expect(help).toHaveCount(0);
+  // « / » : recherche ; les lettres tapées y restent du texte.
+  await page.keyboard.press("/");
+  await page.keyboard.type("rjm");
+  await expect(page.locator(".list-search input")).toHaveValue("rjm");
+});
+
+test("W1 : envoi retenu par son délai, annulé, puis rouvert sans erreur", async ({ context, page }) => {
+  await page.evaluate(() => localStorage.setItem("librix.mail", JSON.stringify({ undoSendSeconds: 5 })));
+  await page.reload();
+  const compose = await newMail(context, page);
+  await write(compose, "marie.dupont@example.com", "À retenir", "Texte à garder");
+  const closed = compose.waitForEvent("close");
+  await send(compose);
+  // Avis « Envoi dans … » avec « Annuler » dans la fenêtre principale.
+  await expect(page.getByText(/Envoi dans \d s/).first()).toBeVisible();
+  const [reopened] = await Promise.all([context.waitForEvent("page"), page.getByText("Annuler", { exact: true }).click()]);
+  await closed;
+  await expect(page.getByText("Envoi annulé", { exact: true })).toBeVisible();
+  await expect(reopened.getByLabel("Objet")).toHaveValue("À retenir");
+  await expect(reopened.getByLabel("Corps du message")).toContainText("Texte à garder");
+  await expect(page.getByText("Message envoyé", { exact: true })).toHaveCount(0);
+});
+
+test("W1 : sans annulation, le message part à la fin du délai", async ({ context, page }) => {
+  await page.evaluate(() => localStorage.setItem("librix.mail", JSON.stringify({ undoSendSeconds: 5 })));
+  await page.reload();
+  const compose = await newMail(context, page);
+  await write(compose, "marie.dupont@example.com", "Parti", "Texte");
+  await send(compose);
+  await expect(page.getByText(/Envoi dans \d s/).first()).toBeVisible();
+  await expect(page.getByText("Message envoyé", { exact: true })).toBeVisible({ timeout: 10_000 });
+});
+
+test("W2 : envoyer plus tard, puis modifier depuis « À envoyer »", async ({ context, page }) => {
+  const compose = await newMail(context, page);
+  await write(compose, "marie.dupont@example.com", "Pour demain", "Texte programmé");
+  const closed = compose.waitForEvent("close");
+  await compose.getByRole("button", { name: "Envoyer plus tard" }).click();
+  await compose.getByRole("menuitem", { name: /Demain matin, 8 h/ }).click();
+  await closed;
+  await expect(page.getByText("Message programmé", { exact: true }).first()).toBeVisible();
+  // « À envoyer » apparaît dans la colonne des dossiers, avec le message.
+  await page.getByRole("treeitem", { name: /À envoyer/ }).click();
+  const list = page.getByRole("region", { name: "À envoyer" });
+  await expect(list.getByText("Pour demain")).toBeVisible();
+  // Modifier : retiré du programme et rouvert dans la rédaction.
+  const [reopened] = await Promise.all([context.waitForEvent("page"), list.getByRole("button", { name: "Modifier" }).click()]);
+  await expect(reopened.getByLabel("Objet")).toHaveValue("Pour demain");
+  await expect(reopened.getByLabel("Corps du message")).toContainText("Texte programmé");
+  await expect(page.getByRole("treeitem", { name: /À envoyer/ })).toHaveCount(0);
+});
+
+test("W3 : modèles créés dans les Paramètres, insérés par la rédaction avec leur objet", async ({ context, page }) => {
+  await page.getByRole("button", { name: "Comptes et paramètres" }).click();
+  const settings = page.getByRole("dialog", { name: "Paramètres" });
+  await settings.getByRole("button", { name: "Modèles", exact: true }).click();
+  const editor = settings.getByRole("textbox", { name: "Texte du modèle" });
+  await editor.click();
+  await page.keyboard.type("Merci pour votre message, je reviens vers vous.");
+  await settings.getByRole("button", { name: "Renommer ce modèle" }).click();
+  await settings.getByLabel("Nom du modèle").fill("Accusé de réception");
+  await page.keyboard.press("Enter");
+  await settings.getByLabel("Objet").fill("Bien reçu");
+  // Un second modèle, réservé à un autre compte : pas proposé ici.
+  await settings.getByRole("button", { name: "Nouveau modèle" }).click();
+  await expect(editor).toHaveText("");
+  await editor.click();
+  await page.keyboard.type("Texte d'un autre compte");
+  await settings.getByLabel("Proposé pour").selectOption("pro");
+  // Revenir au premier : texte et objet gardés.
+  const list = settings.getByRole("listbox", { name: "Modèles" });
+  await list.getByRole("option", { name: "Accusé de réception" }).click();
+  await expect(editor).toHaveText("Merci pour votre message, je reviens vers vous.");
+  await expect(settings.getByLabel("Objet")).toHaveValue("Bien reçu");
+  await settings.getByRole("button", { name: "Enregistrer les modèles" }).click();
+  await expect(settings.getByText("Enregistrés", { exact: true })).toBeVisible();
+  await settings.getByRole("button", { name: "Fermer" }).click();
+
+  const compose = await newMail(context, page);
+  await compose.getByRole("button", { name: "Insérer un modèle" }).click();
+  await expect(compose.getByRole("menuitem")).toHaveCount(1);
+  await compose.getByRole("menuitem", { name: "Accusé de réception" }).click();
+  await expect(compose.getByLabel("Corps du message")).toContainText("Merci pour votre message, je reviens vers vous.");
+  await expect(compose.getByLabel("Objet")).toHaveValue("Bien reçu");
+  // Un objet déjà écrit n'est pas remplacé.
+  await compose.getByLabel("Objet").fill("Mon objet");
+  await compose.getByRole("button", { name: "Insérer un modèle" }).click();
+  await compose.getByRole("menuitem", { name: "Accusé de réception" }).click();
+  await expect(compose.getByLabel("Objet")).toHaveValue("Mon objet");
+});
+
+test("U2 : conversation repliée avec sa réponse envoyée, dépliée, puis liste à plat", async ({ page }) => {
+  const list = page.getByRole("listbox", { name: "Messages" });
+  const row = list.getByRole("option").filter({ hasText: "Devis pour l'audit d'architecture" });
+  await expect(row).toHaveCount(1);
+  await expect(row.locator(".thread-count")).toHaveText("2");
+  await row.getByRole("button", { name: "Déplier la conversation" }).click();
+  const sent = list.getByRole("option").filter({ hasText: "RE: Devis pour l'audit d'architecture" });
+  await expect(sent).toContainText("Envoyé");
+  await list.getByRole("button", { name: "Replier la conversation" }).click();
+  await expect(sent).toHaveCount(0);
+  // Réglage général coupé : liste à plat.
+  await page.getByRole("button", { name: "Comptes et paramètres" }).click();
+  const settings = page.getByRole("dialog", { name: "Paramètres" });
+  await settings.getByRole("button", { name: "Général" }).click();
+  await settings.getByRole("switch", { name: "Regrouper les messages en conversations" }).click();
+  await settings.getByRole("button", { name: "Fermer" }).click();
+  await expect(list.locator(".thread-count")).toHaveCount(0);
+});
+
+test("U3 : la conversation dans le volet de lecture, un autre message ouvert à sa place", async ({ page }) => {
+  const list = page.getByRole("listbox", { name: "Messages" });
+  await list.getByRole("option").filter({ hasText: "Devis pour l'audit d'architecture" }).click();
+  const reading = page.getByRole("region", { name: "Volet de lecture" });
+  const strip = reading.getByRole("navigation", { name: "Messages de la conversation" });
+  await expect(strip.getByRole("button")).toHaveCount(2);
+  await expect(reading.getByRole("heading", { level: 1 })).toHaveText("Devis pour l'audit d'architecture");
+  // La réponse envoyée, ouverte depuis le volet ; la sélection de la liste ne change pas.
+  // Visée par son texte : « Vous » figure aussi dans le message de Julien (« Vous trouverez… »).
+  const reply = strip.getByRole("button").filter({ hasText: "Merci, je regarde" });
+  await expect(reply).toContainText("Vous");
+  await reply.click();
+  await expect(reading.getByRole("heading", { level: 1 })).toHaveText("RE: Devis pour l'audit d'architecture");
+  await expect(reply).toHaveAttribute("aria-current", "true");
+  await expect(list.getByRole("option", { selected: true })).toHaveCount(1);
 });
 
 /** Ouvre l'assistant d'ajout de compte (lot I2) et cherche les réglages de l'adresse. */

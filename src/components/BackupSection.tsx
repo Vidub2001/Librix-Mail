@@ -154,7 +154,7 @@ export function BackupSection({ accountCount }: { accountCount: number }) {
 
   return (
     <div className="settings-pane">
-      <h3 className="settings-pane-title">{t("Sauvegarde")}</h3>
+      <h3 className="settings-pane-title section-title">{t("Sauvegarde")}</h3>
       <div className="about-scroll">
         <fieldset className="account-fieldset">
           <legend>{t("Exporter la configuration")}</legend>
@@ -316,14 +316,13 @@ export function BackupSection({ accountCount }: { accountCount: number }) {
             </MessageBar>
           )}
         </fieldset>
-        <PortablePassword />
       </div>
     </div>
   );
 }
 
-/** Mode portable : changement du mot de passe maître (affiché seulement en mode portable). */
-function PortablePassword() {
+/** Mode portable : changement du mot de passe maître (affiché seulement en mode portable ; rubrique Sécurité depuis le lot T5). */
+export function PortablePassword() {
   const [portable, setPortable] = useState(false);
   const [old, setOld] = useState("");
   const [next, setNext] = useState("");

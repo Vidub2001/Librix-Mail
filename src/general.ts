@@ -50,6 +50,10 @@ export interface GeneralSettings {
   keepInTray: boolean;
   /** Signaler les nouvelles versions publiées (lot K1) : GitHub interrogé une fois par jour. */
   checkUpdates: boolean;
+  /** Messages regroupés en conversations dans la liste (lot U2). */
+  conversations: boolean;
+  /** Dossiers affichés à plat malgré `conversations` (clic droit sur un dossier). */
+  flatFolders: string[];
 }
 
 const KEY = "librix.general";
@@ -70,6 +74,8 @@ const DEFAULTS: GeneralSettings = {
   bodyMode: "original",
   keepInTray: true,
   checkUpdates: true,
+  conversations: true,
+  flatFolders: [],
 };
 
 let cached: GeneralSettings | null = null;
@@ -198,4 +204,9 @@ export function reminderLabel(minutes: number): string {
   if (minutes % 1440 === 0) return t("{n} jours avant", { n: minutes / 1440 });
   if (minutes % 60 === 0) return t("{n} heures avant", { n: minutes / 60 });
   return t("{n} minutes avant", { n: minutes });
+}
+
+/** Conversations dans ce dossier (lot U2) : réglage général, sauf dossier mis à plat. */
+export function conversationsIn(g: GeneralSettings, folderId: string): boolean {
+  return g.conversations && !g.flatFolders.includes(folderId);
 }

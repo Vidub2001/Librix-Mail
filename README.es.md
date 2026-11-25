@@ -52,7 +52,7 @@ Las versiones se compilan a partir de este repositorio con GitHub Actions. Cada 
 
 Los archivos de Windows aún no están firmados: Windows puede mostrar un aviso en la primera instalación.
 
-> **Estado:** versión 0.3.9, usada a diario por su autor. Se agradecen los comentarios y los avisos de errores.
+> **Estado:** versión 0.4.0, usada a diario por su autor. Se agradecen los comentarios y los avisos de errores.
 
 ## Funciones
 
@@ -64,6 +64,9 @@ Los archivos de Windows aún no están firmados: Windows puede mostrar un aviso 
   personales de O365, Gmail).
 - Carpetas unificadas (Bandeja de entrada, Enviados, Borradores…) o cuentas separadas; gestión
   completa de carpetas (crear, renombrar, mover, eliminar, vaciar).
+- **Conversaciones**: mensajes de una misma conversación agrupados en la lista (tus respuestas
+  incluidas), desplegables y mostrados bajo el asunto en el panel de lectura; sin agrupar si se
+  prefiere, en todas partes o por carpeta.
 - Lectura: HTML aislado y sin scripts, imágenes remotas bloqueadas por defecto, adjuntos (abrir,
   guardar), invitaciones de calendario añadidas,
   actualizadas o retiradas (cancelación) con un clic; respuesta al organizador (Aceptar, Quizás,
@@ -76,9 +79,11 @@ Los archivos de Windows aún no están firmados: Windows puede mostrar un aviso 
 - Mensajes cifrados con S/MIME: leídos con ese mismo certificado, descifrados en memoria (nada
   sin cifrar en el disco); enviados cifrados con el botón «Cifrar», gracias a los certificados de
   los corresponsales guardados de sus mensajes firmados.
-- Redacción: HTML o texto sin formato (formato predeterminado configurable), firmas por cuenta (con formato y en texto simple),
-  responder y reenviar, adjuntos con arrastrar y soltar, borradores guardados automáticamente,
+- Redacción: HTML o texto sin formato (formato predeterminado configurable), hasta cinco firmas por cuenta (con formato y en texto simple),
+  plantillas de mensajes, **deshacer el envío** y **envío programado**, responder y reenviar, adjuntos con arrastrar y soltar, borradores guardados automáticamente,
   sugerencias de destinatarios, **aviso de adjunto olvidado**.
+- Atajos de teclado (responder, reenviar, leído, marca de seguimiento, archivar, mensaje
+  siguiente…), mostrados con la tecla «?».
 - Mover y eliminar entre cuentas, con diario: un movimiento interrumpido (corte de red, aplicación
   cerrada) se reanuda en el siguiente inicio, sin duplicados ni pérdidas. Clic derecho › «Mover»:
   carpetas recientes, búsqueda entre las carpetas de todas las cuentas o una carpeta nueva en la
@@ -305,6 +310,10 @@ Las incidencias y las contribuciones son bienvenidas. Todo texto de la interfaz,
 modificado, pasa por `t()` con sus entradas en `src/locales/en.ts` y `src/locales/es.ts`; los
 textos generados por el backend en Rust pasan por `tr!` con sus entradas en
 `src-tauri/src/locales/`.
+
+## Desarrollo con IA
+
+Librix Mail se desarrolla con una ayuda importante de la IA generativa: gran parte del código y de la documentación se escribe con Claude (Anthropic), y los commits correspondientes llevan la línea `Co-Authored-By: Claude`. El mantenedor decide qué se construye, divide el trabajo en lotes pequeños, revisa y prueba cada lote antes de fusionarlo, y responde del resultado. Cada cambio pasa por los mismos controles automáticos (`make audit`: pruebas, Clippy, Semgrep, auditoría de dependencias) y los analizadores se someten a fuzzing; el [modelo de amenazas](docs/MODELE-MENACE.es.md) y los [controles](docs/AUDIT.es.md) son públicos.
 
 ## Descargas y firma
 

@@ -30,13 +30,16 @@ mod migrate;
 mod mimeparse;
 mod o365;
 mod oauth;
+mod outbox;
 mod pim;
 mod pimfmt;
 mod portable;
 mod router;
 pub mod sanitize;
+mod scheduled;
 mod secrets;
 mod smime;
+mod threads;
 mod transport;
 mod tray;
 mod tz;
@@ -163,13 +166,15 @@ pub mod fuzz_api {
     }
 
     /// Les en-têtes d'un message reçu repris pour y répondre (`References`,
-    /// destinataires, `Message-ID`).
+    /// destinataires, `Message-ID`), et lus pour les conversations (lot U1).
     pub fn headers(raw: &[u8]) {
         for name in ["References", "To", "Cc", "Message-ID"] {
             if let Some(value) = mail_core::compose::header_value(raw, name) {
                 let _ = mail_core::compose::parse_address_list(&value);
             }
         }
+        // Lot U1 : en-têtes de discussion lus pour les conversations.
+        let _ = crate::threads::thread_headers(raw);
     }
 
     /// Un fichier importé (`.eml` ou `.mbox`, lot E8a) : découpé en messages,
@@ -310,6 +315,8 @@ pub struct AppState {
     pub files_dir: PathBuf,
     /// Destination de « Télécharger ».
     pub downloads_dir: PathBuf,
+    /// Envois retenus le temps de pouvoir les annuler (lot W1).
+    pub held_sends: Arc<outbox::HeldSends>,
 }
 
 /// Ne prend aucun verrou : n'affiche que les emplacements de fichiers.
@@ -437,7 +444,10 @@ pub fn run() {
                 config_file,
                 files_dir,
                 downloads_dir,
+                held_sends: Arc::default(),
             });
+            // Messages programmés (lot W2) : envoyés à leur heure ; en retard, au premier passage.
+            scheduled::start(app.handle().clone());
             // Fenêtre principale (stockage du moteur web dans `data` en mode portable).
             diag::step("surveillance des boîtes lancée");
             windows::create_main(app.handle())?;
@@ -468,6 +478,7 @@ pub fn run() {
             commands::list_folders,
             commands::sync_folders,
             commands::list_messages,
+            commands::folder_conversations,
             commands::sync_messages,
             commands::sync_messages_many,
             commands::get_message,
@@ -477,6 +488,11 @@ pub fn run() {
             commands::move_messages,
             commands::move_to_role,
             commands::send_message,
+            commands::cancel_send,
+            commands::schedule_send,
+            commands::scheduled_list,
+            commands::unschedule,
+            commands::send_scheduled_now,
             commands::open_attachment,
             commands::save_attachment,
             commands::test_account,

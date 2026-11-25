@@ -480,10 +480,14 @@ fn full_session() {
 #[test]
 fn idle_reports_new_mail() {
     let stream = start("IDLE IDLE-EVENT");
-    stream.set_read_timeout(Some(std::time::Duration::from_millis(50))).unwrap();
-    let mut c = Client::connect(stream).unwrap();
+    // Délai court pour l'attente d'IDLE seulement : posé avant, il faisait
+    // échouer l'accueil et la connexion sur un agent Windows chargé. Posé sur
+    // le même socket que le client (prêté), pas sur une copie : sous Windows,
+    // une copie (`try_clone`) a ses propres réglages, et IDLE attendait sans fin.
+    let mut c = Client::connect(&stream).unwrap();
     c.login(USER, PASS).unwrap();
     c.select("INBOX").unwrap();
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(50))).unwrap();
     let changed = c.idle(std::time::Duration::from_secs(5), || true).unwrap();
     assert!(changed);
     c.noop().unwrap(); // la session reste utilisable après IDLE
@@ -492,10 +496,14 @@ fn idle_reports_new_mail() {
 #[test]
 fn idle_times_out_quietly() {
     let stream = start("IDLE");
-    stream.set_read_timeout(Some(std::time::Duration::from_millis(50))).unwrap();
-    let mut c = Client::connect(stream).unwrap();
+    // Délai court pour l'attente d'IDLE seulement : posé avant, il faisait
+    // échouer l'accueil et la connexion sur un agent Windows chargé. Posé sur
+    // le même socket que le client (prêté), pas sur une copie : sous Windows,
+    // une copie (`try_clone`) a ses propres réglages, et IDLE attendait sans fin.
+    let mut c = Client::connect(&stream).unwrap();
     c.login(USER, PASS).unwrap();
     c.select("INBOX").unwrap();
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(50))).unwrap();
     let t = std::time::Instant::now();
     let changed = c.idle(std::time::Duration::from_millis(300), || true).unwrap();
     assert!(!changed);

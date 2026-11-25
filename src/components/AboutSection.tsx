@@ -110,7 +110,7 @@ export function AboutSection() {
 
   return (
     <div className="settings-pane about-pane">
-      <h3 className="settings-pane-title">{t("À propos")}</h3>
+      <h3 className="settings-pane-title section-title">{t("À propos")}</h3>
 
       <div className="about-scroll">
         <div className="about-hero">

@@ -68,12 +68,15 @@ export function GeneralSection({ themeMode, onThemeMode }: Props) {
   const g = useGeneral();
   return (
     <div className="settings-pane compact">
-      <h3 className="settings-pane-title">{t("Général")}</h3>
+      <h3 className="settings-pane-title section-title">{t("Général")}</h3>
 
       <fieldset className="account-fieldset">
         <legend>{t("Langue")}</legend>
-        <Field label={t("Langue de l'interface")} hint={t("Librix Mail redémarre l'affichage pour appliquer la langue.")}>
+        {/* Choix et explication sur une ligne (lot T5) : la légende dit déjà « Langue ». */}
+        <div className="inline-setting">
           <Select
+            aria-label={t("Langue de l'interface")}
+            className="inline-select"
             value={g.language}
             onChange={(_, d) => {
               saveGeneral({ language: d.value as Lang });
@@ -87,7 +90,10 @@ export function GeneralSection({ themeMode, onThemeMode }: Props) {
               </option>
             ))}
           </Select>
-        </Field>
+          <span className="muted settings-hint">
+            {t("Librix Mail redémarre l'affichage pour appliquer la langue ou l'apparence.")}
+          </span>
+        </div>
       </fieldset>
 
       {/* Deux groupes côte à côte (lot T), pour gagner de la hauteur. */}
@@ -120,6 +126,12 @@ export function GeneralSection({ themeMode, onThemeMode }: Props) {
           {g.layout === "hidden" && (
             <p className="muted settings-hint">{t("Double-cliquez sur un message pour l'ouvrir dans une fenêtre.")}</p>
           )}
+          {/* Lot U2 : un dossier peut être mis à plat par son clic droit. */}
+          <Switch
+            checked={g.conversations}
+            onChange={(_, d) => saveGeneral({ conversations: d.checked === true })}
+            label={t("Regrouper les messages en conversations")}
+          />
         </fieldset>
       </div>
 

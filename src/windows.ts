@@ -15,8 +15,10 @@ export type WindowEvent =
   | { type: "moved"; ids: number[] }
   | { type: "flags"; ids: number[] }
   | { type: "draft" }
+  /** La liste des messages programmés a changé (lot W2) : émis par le backend seul. */
+  | { type: "scheduled"; sendAt?: number | null }
   /** Message confié au backend, envoyé en arrière-plan (lot E1). */
-  | { type: "sending"; accountId: string }
+  | { type: "sending"; accountId: string; held?: { sendKey: string; delay: number } }
   /** Envoi en arrière-plan échoué : émis par le backend seul, avec le message à rouvrir. */
   | {
       type: "sendFailed";
@@ -27,6 +29,16 @@ export type WindowEvent =
       answeredId: number | null;
       draftId: number | null;
       /** Fenêtre de rédaction d'où vient le message (sa copie de secours). */
+      window: string;
+    }
+  /** Envoi annulé pendant son délai (lot W1) : émis par le backend seul, message rouvert sans erreur. */
+  | {
+      type: "sendCancelled";
+      accountId: string;
+      draft: Draft;
+      attachments: AttachmentInput[];
+      answeredId: number | null;
+      draftId: number | null;
       window: string;
     };
 

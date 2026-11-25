@@ -23,7 +23,7 @@ export function AgendaSection() {
   const today = weekNumber(Date.now(), g.weekStart, g.firstWeek);
   return (
     <div className="settings-pane">
-      <h3 className="settings-pane-title">{t("Agenda")}</h3>
+      <h3 className="settings-pane-title section-title">{t("Agenda")}</h3>
 
       <fieldset className="account-fieldset">
         <legend>{t("Semaine")}</legend>

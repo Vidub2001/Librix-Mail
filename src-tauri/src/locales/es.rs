@@ -321,6 +321,11 @@ pub(super) static ES: &[(&str, &str)] = &[
     ("liste illisible", "lista ilegible"),
     ("{n} nouveaux messages", "{n} mensajes nuevos"),
     ("Message non envoyé", "Mensaje no enviado"),
+    // Annuler l'envoi (lot W1).
+    ("Ce message est déjà en attente d'envoi.", "Este mensaje ya está en espera de envío."),
+    // Envoyer plus tard (lot W2).
+    ("Un message à chiffrer ne peut pas être programmé : envoyez-le maintenant.", "Un mensaje para cifrar no se puede programar: envíelo ahora."),
+    ("Heure d'envoi invalide : choisissez une heure à venir, dans l'année.", "Hora de envío no válida: elija una hora futura, dentro del año."),
     // Proton Mail Bridge, certificat épinglé (lot I3).
     ("{label} : un certificat épinglé n'est admis que pour Proton Mail Bridge, sur cet ordinateur (127.0.0.1).", "{label}: un certificado fijado solo se admite para Proton Mail Bridge, en este equipo (127.0.0.1)."),
     ("{label} : empreinte de certificat invalide", "{label}: huella de certificado no válida"),

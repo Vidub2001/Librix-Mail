@@ -153,7 +153,7 @@ function quote(m: Message, mode: "reply" | "replyAll" | "forward"): string {
   if (mode !== "forward") {
     return (
       `<p><br></p>` +
-      signatureBlock(m.accountId, true) +
+      signatureBlock(m.accountId, "reply") +
       `<p><br></p>` +
       `<div class="quote-attribution">${t("Le {date}, {from} a écrit :", { date: escape(longDate(m.date)), from })}</div>` +
       `<blockquote type="cite" style="${QUOTE_STYLE}">${m.bodySimple}</blockquote>`
@@ -161,7 +161,7 @@ function quote(m: Message, mode: "reply" | "replyAll" | "forward"): string {
   }
   return (
     `<p><br></p>` +
-    signatureBlock(m.accountId, true) +
+    signatureBlock(m.accountId, "forward") +
     `<p><br></p>` +
     `<hr style="border:none;border-top:1px solid #e1e1e1;margin:8px 0">` +
     `<div class="quote-header"><b>${t("De :")}</b> ${from}<br>` +
@@ -180,7 +180,7 @@ export function newDraft(accountId: string): ComposeInit {
     to: "",
     cc: "",
     subject: "",
-    html: "<p><br></p>" + signatureBlock(accountId, false),
+    html: "<p><br></p>" + signatureBlock(accountId, "new"),
     inReplyTo: null,
     references: null,
     answeredId: null,
@@ -194,7 +194,7 @@ export function mailtoDraft(accountId: string, link: { to: string; cc: string; s
   const body = link.body
     ? `<p>${escape(link.body).replace(/\r?\n/g, "<br>")}</p>`
     : "<p><br></p>";
-  return { ...init, to: link.to, cc: link.cc, subject: link.subject, html: body + signatureBlock(accountId, false) };
+  return { ...init, to: link.to, cc: link.cc, subject: link.subject, html: body + signatureBlock(accountId, "new") };
 }
 
 export function replyDraft(mode: "reply" | "replyAll" | "forward", m: Message, accounts: Account[]): ComposeInit {

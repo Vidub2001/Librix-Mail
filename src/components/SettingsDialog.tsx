@@ -4,8 +4,8 @@ import { AccountWizard } from "./AccountWizard";
 import { BridgeCertificate, isLoopback } from "./BridgeCertificate";
 import { AgendaSection } from "./AgendaSection";
 import { RulesSection } from "./RulesSection";
-import { SmimeSection } from "./SmimeSection";
-import { CorrespondentsSection } from "./CorrespondentsSection";
+import { SecuritySection } from "./SecuritySection";
+import { TemplatesSection } from "./TemplatesSection";
 import type { Rule } from "../rules";
 import {
   Button,
@@ -32,15 +32,20 @@ import {
   ArrowLeft20Regular,
   ArrowSync20Regular,
   CheckmarkCircle16Filled,
+  Code20Regular,
   Delete20Regular,
   Dismiss20Regular,
   DismissCircle16Filled,
   Edit20Regular,
   Info20Regular,
   Mail20Regular,
+  MailTemplate20Regular,
   MoreHorizontal20Regular,
   PersonMail20Regular,
   Settings20Regular,
+  ShieldLock20Regular,
+  Star20Filled,
+  Star20Regular,
   CalendarLtr20Regular,
   Filter20Regular,
 } from "@fluentui/react-icons";
@@ -53,11 +58,17 @@ import { BackupSection } from "./BackupSection";
 import {
   DEFAULT_ATTACHMENT_WORDS,
   SYNC_CHOICES,
+  UNDO_SEND_CHOICES,
+  accountSignatures,
   cleanSignatureHtml,
   loadSettings,
+  newSignature,
+  saveAccountSignatures,
   saveSettings,
+  signatureFilled,
   useMailSettings,
   type MailSettings,
+  type SignatureSet,
 } from "../settings";
 import { setHtml } from "../safe-html";
 import { FormatToolbar } from "./FormatToolbar";
@@ -122,7 +133,7 @@ type Notify = (title: string, body?: string, intent?: "success" | "error" | "inf
 
 // ------------------------------------------------------------------ fenêtre
 
-type Section = "accounts" | "general" | "mail" | "rules" | "agenda" | "backup" | "about";
+type Section = "accounts" | "general" | "mail" | "templates" | "security" | "rules" | "agenda" | "backup" | "about";
 
 interface Props {
   open: boolean;
@@ -149,6 +160,8 @@ export function SettingsDialog({ open, onClose, accounts, onChanged, notify, the
     { id: "accounts", label: t("Comptes"), icon: <PersonMail20Regular />, ready: true },
     { id: "general", label: t("Général"), icon: <Settings20Regular />, ready: true },
     { id: "mail", label: t("Courrier"), icon: <Mail20Regular />, ready: true },
+    { id: "templates", label: t("Modèles"), icon: <MailTemplate20Regular />, ready: true },
+    { id: "security", label: t("Sécurité"), icon: <ShieldLock20Regular />, ready: true },
     { id: "rules", label: t("Règles"), icon: <Filter20Regular />, ready: true },
     { id: "agenda", label: t("Agenda"), icon: <CalendarLtr20Regular />, ready: true },
     { id: "backup", label: t("Sauvegarde"), icon: <ArrowSync20Regular />, ready: true },
@@ -193,6 +206,8 @@ export function SettingsDialog({ open, onClose, accounts, onChanged, notify, the
             {section === "about" && <AboutSection />}
             {section === "backup" && <BackupSection accountCount={accounts.length} />}
             {section === "mail" && <MailSection accounts={accounts} />}
+            {section === "templates" && <TemplatesSection accounts={accounts} />}
+            {section === "security" && <SecuritySection accounts={accounts} />}
             {section === "accounts" && (
               <AccountsSection open={open} accounts={accounts} onChanged={onChanged} notify={notify} />
             )}
@@ -210,19 +225,21 @@ function AttachmentWords({ value, onSave }: { value: string; onSave: (words: str
   const [text, setText] = useState(value);
   useEffect(() => setText(value), [value]);
   return (
-    <Field
-      label={t("Mots recherchés (séparés par des virgules)")}
-      hint={t("Recherchés dans l'objet et dans votre texte, sans le message cité ni la signature.")}
-    >
+    <Field>
       <Textarea
+        aria-label={t("Mots recherchés (séparés par des virgules)")}
         value={text}
         rows={2}
         resize="vertical"
         onChange={(_, d) => setText(d.value)}
         onBlur={() => text !== value && onSave(text)}
       />
-      <div className="mail-signature-actions">
-        <Button size="small" appearance="subtle" onClick={() => onSave(DEFAULT_ATTACHMENT_WORDS)}>
+      {/* Explication et retour à la liste d'origine sur une ligne (lot T5). */}
+      <div className="inline-setting">
+        <span className="muted settings-hint">
+          {t("Mots séparés par des virgules, recherchés dans l'objet et votre texte (sans le message cité ni la signature).")}
+        </span>
+        <Button size="small" appearance="subtle" className="push-right" onClick={() => onSave(DEFAULT_ATTACHMENT_WORDS)}>
           {t("Rétablir la liste par défaut")}
         </Button>
       </div>
@@ -230,51 +247,144 @@ function AttachmentWords({ value, onSave }: { value: string; onSave: (words: str
   );
 }
 
-/** Synchronisation et signatures (une par compte). */
+/** Au plus 5 signatures par compte (lot T4). */
+const MAX_SIGNATURES = 5;
+
+/** Signatures d'un compte pour l'édition : une première, vide, s'il n'en a aucune. */
+function editableSignatures(accountId: string): SignatureSet {
+  const set = accountSignatures(accountId);
+  if (set.list.length > 0) return set;
+  const first = newSignature();
+  return { list: [first], defaultId: first.id };
+}
+
+/** Synchronisation et signatures (jusqu'à cinq par compte, lot T4). */
 function MailSection({ accounts }: { accounts: Account[] }) {
   const settings = useMailSettings();
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
-  const [text, setText] = useState(settings.signatures[accountId] ?? "");
+  /** Signatures du compte en cours de modification, enregistrées par « Enregistrer les signatures ». */
+  const [signatureSet, setSignatureSet] = useState<SignatureSet>(() => editableSignatures(accountId));
+  const [selectedId, setSelectedId] = useState(signatureSet.list[0]?.id ?? "");
+  const [text, setText] = useState(signatureSet.list[0]?.text ?? "");
   const [saved, setSaved] = useState(true);
   /** Éditeur de la signature mise en forme (lot T) : il gère son propre contenu. */
   const htmlEditor = useRef<HTMLDivElement>(null);
   /** Signature affichée dans la zone : en texte simple, sinon mise en forme. */
   const [editingText, setEditingText] = useState(false);
+  /** Code HTML de la signature mise en forme, quand on l'affiche pour le coller ou le modifier (null : vue mise en forme). */
+  const [source, setSource] = useState<string | null>(null);
 
-  // Changement de compte : ses deux signatures s'affichent.
+  /** Bascule vue mise en forme ↔ code HTML ; le code est nettoyé en revenant à la vue. */
+  const toggleSource = () => {
+    const el = htmlEditor.current;
+    if (!el) return;
+    if (source === null) {
+      setSource(el.innerHTML);
+    } else {
+      setHtml(el, cleanSignatureHtml(source));
+      setSource(null);
+    }
+  };
+
+  /** Les signatures avec le contenu de la zone de saisie reporté dans celle sélectionnée. */
+  const withEditor = (): SignatureSet => ({
+    ...signatureSet,
+    list: signatureSet.list.map((e) =>
+      e.id === selectedId ? { ...e, text, html: source ?? htmlEditor.current?.innerHTML ?? e.html } : e,
+    ),
+  });
+
+  /** Affiche une signature dans la zone de saisie. */
+  const show = (set: SignatureSet, id: string) => {
+    const entry = set.list.find((e) => e.id === id);
+    setSignatureSet(set);
+    setSelectedId(id);
+    setText(entry?.text ?? "");
+    if (htmlEditor.current) setHtml(htmlEditor.current, entry?.html ?? "");
+    setSource(null);
+  };
+
+  // Changement de compte : ses signatures s'affichent, la première dans la zone.
   useEffect(() => {
-    const current = loadSettings();
-    setText(current.signatures[accountId] ?? "");
-    if (htmlEditor.current) setHtml(htmlEditor.current, current.htmlSignatures[accountId] ?? "");
+    const set = editableSignatures(accountId);
+    show(set, set.list[0]?.id ?? "");
     setSaved(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId]);
+
+  const select = (id: string) => {
+    if (id !== selectedId) show(withEditor(), id);
+  };
+
+  const addSignature = () => {
+    const current = withEditor();
+    if (current.list.length >= MAX_SIGNATURES) return;
+    const entry = newSignature(t("Signature {n}", { n: current.list.length + 1 }));
+    show({ list: [...current.list, entry], defaultId: current.defaultId || entry.id }, entry.id);
+    setSaved(false);
+  };
+
+  const removeSignature = () => {
+    const list = withEditor().list.filter((e) => e.id !== selectedId);
+    if (list.length === 0) list.push(newSignature());
+    const defaultId = list.some((e) => e.id === signatureSet.defaultId) ? signatureSet.defaultId : list[0].id;
+    show({ list, defaultId }, list[0].id);
+    setSaved(false);
+  };
+
+  /** Signature dont le nom est en cours de modification, dans la liste (lot T4). */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
+
+  const startRename = (id: string) => {
+    select(id);
+    setDraftName(signatureSet.list.find((e) => e.id === id)?.name ?? "");
+    setRenaming(id);
+  };
+
+  const finishRename = (keep: boolean) => {
+    const id = renaming;
+    setRenaming(null);
+    if (!keep || id === null) return;
+    const name = draftName.trim();
+    setSignatureSet((set) => ({ ...set, list: set.list.map((e) => (e.id === id ? { ...e, name } : e)) }));
+    setSaved(false);
+  };
+
+  const makeDefault = () => {
+    setSignatureSet((set) => ({ ...set, defaultId: selectedId }));
+    setSaved(false);
+  };
 
   const update = (patch: Partial<MailSettings>) => saveSettings({ ...loadSettings(), ...patch });
 
-  const saveSignature = () => {
-    const current = loadSettings();
-    const html = cleanSignatureHtml(htmlEditor.current?.innerHTML ?? "");
-    if (htmlEditor.current) setHtml(htmlEditor.current, html);
-    saveSettings({
+  const saveSignatures = () => {
+    const current = withEditor();
+    const cleaned: SignatureSet = {
       ...current,
-      signatures: { ...current.signatures, [accountId]: text },
-      htmlSignatures: { ...current.htmlSignatures, [accountId]: html },
-    });
+      list: current.list.map((e) => ({ ...e, name: e.name.trim(), html: cleanSignatureHtml(e.html) })),
+    };
+    saveAccountSignatures(accountId, cleaned);
+    const html = cleaned.list.find((e) => e.id === selectedId)?.html ?? "";
+    if (htmlEditor.current) setHtml(htmlEditor.current, html);
+    if (source !== null) setSource(html);
+    setSignatureSet(cleaned);
     setSaved(true);
   };
-  const hasSignature = (settings.signatures[accountId] ?? "") !== "" || (settings.htmlSignatures[accountId] ?? "") !== "";
+  const hasSignature = accountSignatures(accountId, settings).list.some(signatureFilled);
+  const nameOf = (name: string) => name.trim() || t("Signature");
 
   return (
     <div className="settings-pane compact">
-      <h3 className="settings-pane-title">{t("Courrier")}</h3>
+      <h3 className="settings-pane-title section-title">{t("Courrier")}</h3>
       <div className="about-scroll">
         <fieldset className="account-fieldset">
           <legend>{t("Synchronisation")}</legend>
-          <Field
-            label={t("Vérifier les nouveaux messages toutes les")}
-            hint={t("Les comptes compatibles reçoivent en plus les nouveaux messages instantanément.")}
-          >
+          {/* Libellé, choix et explication sur une ligne, pour gagner de la hauteur (lot T5). */}
+          <div className="inline-setting">
+            <label htmlFor="mail-sync-minutes">{t("Vérifier les nouveaux messages toutes les")}</label>
             <Select
+              id="mail-sync-minutes"
               value={String(settings.syncMinutes)}
               onChange={(_, d) => update({ syncMinutes: Number(d.value) })}
               className="mail-sync-select"
@@ -285,7 +395,10 @@ function MailSection({ accounts }: { accounts: Account[] }) {
                 </option>
               ))}
             </Select>
-          </Field>
+            <span className="muted settings-hint">
+              {t("Les comptes compatibles les reçoivent aussi en direct.")}
+            </span>
+          </div>
         </fieldset>
 
         <fieldset className="account-fieldset">
@@ -294,29 +407,42 @@ function MailSection({ accounts }: { accounts: Account[] }) {
             <p className="muted">{t("Ajoutez d'abord un compte.")}</p>
           ) : (
             <>
-              <Field label={t("Compte")}>
-                <Select value={accountId} onChange={(_, d) => setAccountId(d.value)}>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name} — {a.email}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
+              <Select aria-label={t("Compte")} className="signature-account" value={accountId} onChange={(_, d) => setAccountId(d.value)}>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} — {a.email}
+                  </option>
+                ))}
+              </Select>
               {/* Deux signatures (lot T) : chacune pour les messages de son format ; l'autre sert à défaut. */}
               {/* Une seule zone (lot T) : la bascule « Format » de la barre choisit laquelle des
                   deux signatures on modifie ; l'autre reste en mémoire jusqu'à l'enregistrement. */}
+              <div className="signature-layout">
               <div className="signature-frame">
-                <FormatToolbar
-                  editor={htmlEditor}
-                  disabled={false}
-                  plain={editingText}
-                  onPlainChange={setEditingText}
-                />
+                <div className="signature-tools">
+                  <FormatToolbar
+                    editor={htmlEditor}
+                    disabled={source !== null}
+                    plain={editingText}
+                    onPlainChange={setEditingText}
+                  />
+                  {/* Code HTML (lot T2) : coller une signature faite ailleurs, ou retoucher la sienne. */}
+                  {!editingText && (
+                    <Button
+                      size="small"
+                      appearance={source !== null ? "primary" : "subtle"}
+                      icon={<Code20Regular />}
+                      aria-pressed={source !== null}
+                      aria-label={t("Code HTML")}
+                      title={t("Afficher le code HTML de la signature, pour en coller un ou le retoucher")}
+                      onClick={toggleSource}
+                    />
+                  )}
+                </div>
                 <div
                   ref={htmlEditor}
                   className="compose-editor signature-editor"
-                  hidden={editingText}
+                  hidden={editingText || source !== null}
                   contentEditable
                   suppressContentEditableWarning
                   role="textbox"
@@ -325,6 +451,19 @@ function MailSection({ accounts }: { accounts: Account[] }) {
                   data-placeholder={t("Prénom Nom, avec mise en forme, lien ou logo")}
                   onInput={() => setSaved(false)}
                 />
+                {!editingText && source !== null && (
+                  <textarea
+                    className="signature-plain signature-code"
+                    aria-label={t("Code HTML de la signature")}
+                    spellCheck={false}
+                    value={source}
+                    placeholder={t("Collez ici le code HTML de votre signature")}
+                    onChange={(e) => {
+                      setSource(e.target.value);
+                      setSaved(false);
+                    }}
+                  />
+                )}
                 {editingText && (
                   <textarea
                     className="signature-plain"
@@ -338,19 +477,118 @@ function MailSection({ accounts }: { accounts: Account[] }) {
                   />
                 )}
               </div>
+              {/* Signatures du compte (lot T4) : jusqu'à cinq, dont une ajoutée d'office. */}
+              <div className="signature-list">
+                <div role="listbox" aria-label={t("Signatures du compte")} className="signature-names">
+                  {signatureSet.list.map((e) =>
+                    e.id === renaming ? (
+                      <Input
+                        key={e.id}
+                        size="small"
+                        autoFocus
+                        className="signature-rename"
+                        aria-label={t("Nom de la signature")}
+                        placeholder={t("Signature")}
+                        value={draftName}
+                        onChange={(_, d) => setDraftName(d.value)}
+                        onKeyDown={(k) => {
+                          if (k.key === "Enter") finishRename(true);
+                          else if (k.key === "Escape") {
+                            k.stopPropagation();
+                            finishRename(false);
+                          }
+                        }}
+                        onBlur={() => finishRename(true)}
+                      />
+                    ) : (
+                    <div
+                      key={e.id}
+                      role="option"
+                      tabIndex={0}
+                      aria-selected={e.id === selectedId}
+                      className={e.id === selectedId ? "signature-name selected" : "signature-name"}
+                      title={t("Double-cliquez pour renommer")}
+                      onClick={() => select(e.id)}
+                      onDoubleClick={() => startRename(e.id)}
+                      onKeyDown={(k) => {
+                        if (k.key === "F2") startRename(e.id);
+                        else if (k.key === "Enter" || k.key === " ") {
+                          k.preventDefault();
+                          select(e.id);
+                        }
+                      }}
+                    >
+                      <span>{nameOf(e.name)}</span>
+                      {e.id === signatureSet.defaultId && (
+                        <Star20Filled className="signature-default" aria-label={t("par défaut")} />
+                      )}
+                    </div>
+                    ),
+                  )}
+                </div>
+                <div className="signature-list-actions">
+                  <Button
+                    size="small"
+                    icon={<Add20Regular />}
+                    disabled={signatureSet.list.length >= MAX_SIGNATURES}
+                    title={t("Nouvelle signature (5 au plus)")}
+                    aria-label={t("Nouvelle signature")}
+                    onClick={addSignature}
+                  />
+                  <Button
+                    size="small"
+                    icon={<Edit20Regular />}
+                    title={t("Renommer cette signature (F2 ou double-clic)")}
+                    aria-label={t("Renommer cette signature")}
+                    onClick={() => startRename(selectedId)}
+                  />
+                  <Button
+                    size="small"
+                    icon={selectedId === signatureSet.defaultId ? <Star20Filled /> : <Star20Regular />}
+                    disabled={selectedId === signatureSet.defaultId}
+                    title={t("Ajoutée d'office aux messages de ce compte")}
+                    aria-label={t("Signature par défaut")}
+                    onClick={makeDefault}
+                  />
+                  <Button
+                    size="small"
+                    icon={<Delete20Regular />}
+                    title={t("Supprimer cette signature")}
+                    aria-label={t("Supprimer cette signature")}
+                    onClick={removeSignature}
+                  />
+                </div>
+              </div>
+              </div>
               <p className="muted settings-hint">
                 {t("Chaque message reçoit la signature de son format ; si elle est vide, l'autre sert à sa place.")}
               </p>
-              <Checkbox
-                checked={settings.signatureOnReplies}
-                onChange={(_, d) => update({ signatureOnReplies: d.checked === true })}
-                label={t("L'ajouter aussi aux réponses et transferts")}
-              />
+              <div className="signature-uses" role="group" aria-label={t("Ajouter la signature d'office aux")}>
+                <span>{t("L'ajouter d'office aux :")}</span>
+                <Checkbox
+                  checked={settings.signatureOnNew}
+                  onChange={(_, d) => update({ signatureOnNew: d.checked === true })}
+                  label={t("nouveaux messages")}
+                />
+                <Checkbox
+                  checked={settings.signatureOnReplies}
+                  onChange={(_, d) => update({ signatureOnReplies: d.checked === true })}
+                  label={t("réponses")}
+                />
+                <Checkbox
+                  checked={settings.signatureOnForwards}
+                  onChange={(_, d) => update({ signatureOnForwards: d.checked === true })}
+                  label={t("transferts")}
+                />
+              </div>
               <div className="mail-signature-actions">
-                <Button appearance="primary" disabled={saved} onClick={saveSignature}>
-                  {t("Enregistrer la signature")}
+                <Button appearance="primary" disabled={saved} onClick={saveSignatures}>
+                  {t("Enregistrer les signatures")}
                 </Button>
                 {saved && hasSignature && <span className="muted">{t("Enregistrée")}</span>}
+                <span className="muted settings-hint push-right">
+                  {t("Vous pouvez insérer une signature dans un message avec le bouton « Signature » de la rédaction.")}
+                </span>
               </div>
             </>
           )}
@@ -366,10 +604,25 @@ function MailSection({ accounts }: { accounts: Account[] }) {
             <AttachmentWords value={settings.attachmentWords} onSave={(w) => update({ attachmentWords: w })} />
           )}
         </fieldset>
-
         <fieldset className="account-fieldset">
-          <legend>{t("Certificats des correspondants (S/MIME)")}</legend>
-          <CorrespondentsSection />
+          <legend>{t("Envoi")}</legend>
+          {/* Lot W1 : le message attend ce délai avant de partir, annulable depuis l'avis « Envoi dans … ». */}
+          <div className="inline-setting">
+            <label htmlFor="mail-undo-send">{t("Délai pour annuler l'envoi")}</label>
+            <Select
+              id="mail-undo-send"
+              value={String(settings.undoSendSeconds)}
+              onChange={(_, d) => update({ undoSendSeconds: Number(d.value) })}
+              className="mail-sync-select"
+            >
+              {UNDO_SEND_CHOICES.map((n) => (
+                <option key={n} value={n}>
+                  {n === 0 ? t("Aucun (envoi immédiat)") : t("{n} secondes", { n })}
+                </option>
+              ))}
+            </Select>
+            <span className="muted settings-hint">{t("Le message attend ce délai, avec un bouton « Annuler », avant de partir.")}</span>
+          </div>
         </fieldset>
       </div>
     </div>
@@ -458,7 +711,7 @@ function AccountsSection({
 
   return (
     <div className="settings-pane">
-      <h3 className="settings-pane-title">{t("Comptes de messagerie")}</h3>
+      <h3 className="settings-pane-title section-title">{t("Comptes de messagerie")}</h3>
       <p className="muted settings-intro">
         {t(
           "Les messages peuvent être déplacés d'un compte à l'autre par glisser-déposer ou avec « Déplacer vers ». Les mots de passe sont conservés dans le trousseau du système, jamais dans un fichier.",
@@ -1149,13 +1402,6 @@ function AccountForm({
         </fieldset>
         )}
 
-        {/* Signature S/MIME (lot D2) : pour un compte déjà enregistré. */}
-        {editing && initial.id && (
-          <fieldset className="account-fieldset">
-            <legend>{t("Signature S/MIME")}</legend>
-            <SmimeSection accountId={initial.id} email={initial.email} />
-          </fieldset>
-        )}
       </div>
 
       {/* Zone toujours visible, juste au-dessus des boutons. */}

@@ -7,6 +7,12 @@ import {
   DialogSurface,
   DialogTitle,
   Input,
+  Menu,
+  MenuDivider,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
   MessageBar,
   MessageBarBody,
   Select,
@@ -16,27 +22,43 @@ import {
 import { formatTime, loadGeneral } from "../general";
 import {
   Attach20Regular,
+  ChevronDown16Regular,
   Delete20Regular,
   Dismiss16Regular,
   LockClosed20Regular,
   Save20Regular,
   Send20Regular,
+  SendClock20Regular,
   ShieldCheckmark20Regular,
 } from "@fluentui/react-icons";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, runningInTauri } from "../api";
 import { t } from "../i18n";
 import { encryptionCheck, parseAddresses, secureFlags, type ComposeAttachment, type ComposeInit } from "../compose";
-import { fileSize } from "../format";
+import { fileSize, longDate } from "../format";
+import { parseSendLater, sendLaterChoices, toLocalInput } from "../schedule";
 import { randomId, trimEndOf } from "../text";
 import type { Account, AttachmentInput, Draft, SigningAccount } from "../types";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { FormatToolbar } from "./FormatToolbar";
-import { setHtml } from "../safe-html";
+import { parseHtml, setHtml } from "../safe-html";
 import { AddressInput } from "./AddressInput";
 import { notifyMain, onCloseRequested } from "../windows";
 import { clearBackup, writeBackup } from "../drafts";
-import { attachmentMention, loadSettings, ownText, plainSignatureContent, signatureContent, withPlainSignature } from "../settings";
+import {
+  accountSignatures,
+  attachmentMention,
+  cleanSignatureHtml,
+  loadSettings,
+  ownText,
+  plainSignatureContent,
+  plainSignatureText,
+  signatureContent,
+  signatureFilled,
+  signatureMark,
+  templatesFor,
+  withPlainSignature,
+} from "../settings";
 
 /** Limite d'envoi, identique à celle du backend. */
 const MAX_TOTAL = 25 * 1024 * 1024;
@@ -120,6 +142,15 @@ interface Props {
   ) => Promise<void>;
   /** « Abandonner » : `draftId` est le brouillon enregistré à supprimer, s'il existe. */
   onDiscard: (draftId: number | null) => void;
+  /** Envoyer plus tard (lot W2) : programme le message pour `sendAt` (secondes Unix). */
+  onSchedule?: (
+    accountId: string,
+    draft: Draft,
+    answeredId: number | null,
+    attachments: AttachmentInput[],
+    draftId: number | null,
+    sendAt: number,
+  ) => Promise<void>;
 }
 
 const TITLES: Record<ComposeInit["mode"], string> = {
@@ -130,7 +161,7 @@ const TITLES: Record<ComposeInit["mode"], string> = {
   draft: t("Brouillon"),
 };
 
-export function Compose({ init, accounts, onSend, onDiscard }: Props) {
+export function Compose({ init, accounts, onSend, onDiscard, onSchedule }: Props) {
   const [accountId, setAccountId] = useState(init.accountId || accounts[0]?.id || "");
   const [to, setTo] = useState(init.to);
   const [cc, setCc] = useState(init.cc);
@@ -248,7 +279,7 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
     if (toPlain) {
       // Signature mise en forme remplacée par celle en texte simple (lot T).
       const block = el.querySelector("[data-signature]");
-      if (block) setHtml(block, plainSignatureContent(accountId));
+      if (block) setHtml(block, plainSignatureContent(accountId, block.getAttribute("data-signature")));
       prefixQuotes(el);
       // Relu puis réécrit en texte : le HTML (mise en forme, citations déjà
       // préfixées de « > ») devient du texte brut.
@@ -407,15 +438,104 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
     };
   }, [encrypt, canSign, to, cc, bcc, showCc, showBcc]);
 
+  /** Signatures du compte d'envoi, proposées par le bouton « Signature » (lots T3, T4). */
+  const signatureChoices = useMemo(
+    () =>
+      accountSignatures(accountId)
+        .list.filter(signatureFilled)
+        .map((e) => ({ id: e.id, label: e.name.trim() || t("Signature") })),
+    [accountId],
+  );
+
+  /**
+   * Insère une signature du compte d'envoi (lots T3, T4) : à la place de celle
+   * déjà dans le message s'il y en a une, sinon sous le paragraphe du curseur.
+   */
+  const insertSignature = (id: string) => {
+    const el = editor.current;
+    if (!el) return;
+    if (plain) {
+      const text = plainSignatureText(accountId, id);
+      if (text) document.execCommand("insertText", false, `\n${text}\n`);
+      touched();
+      return;
+    }
+    const content = signatureContent(accountId, id);
+    if (!content) return;
+    const existing = el.querySelector<HTMLElement>("[data-signature]");
+    if (existing) {
+      existing.dataset.signature = signatureMark(id);
+      setHtml(existing, content);
+    } else {
+      const block = document.createElement("div");
+      block.dataset.signature = signatureMark(id);
+      setHtml(block, content);
+      const sel = window.getSelection();
+      const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+      // Paragraphe du curseur, au premier niveau de l'éditeur ; sans curseur, en fin de message.
+      let top: Node | null = range && range.startContainer !== el && el.contains(range.startContainer) ? range.startContainer : null;
+      while (top && top.parentNode !== el) top = top.parentNode;
+      if (top) el.insertBefore(block, top.nextSibling);
+      else el.append(block);
+    }
+    touched();
+  };
+
+  /** Modèles proposés par le bouton « Modèles » (lot W3) : ceux du compte d'envoi et les communs. */
+  const templateChoices = useMemo(
+    () => templatesFor(accountId).map((m) => ({ id: m.id, label: m.name || t("Modèle"), subject: m.subject, html: m.html })),
+    [accountId],
+  );
+
+  /**
+   * Insère un modèle (lot W3) à l'endroit du curseur, à la place de la
+   * sélection ; sans curseur dans le message, en tête. Son objet ne remplit
+   * que celui d'un message qui n'en a pas encore.
+   */
+  const insertTemplate = (id: string) => {
+    const el = editor.current;
+    const m = templateChoices.find((c) => c.id === id);
+    if (!el || !m) return;
+    if (m.subject && !subject.trim()) setSubject(m.subject);
+    // Nettoyé de nouveau : un modèle peut venir d'une version antérieure ou d'une sauvegarde importée.
+    const html = cleanSignatureHtml(m.html);
+    if (html && plain) {
+      document.execCommand("insertText", false, htmlToPlain(html));
+    } else if (html) {
+      const sel = window.getSelection();
+      let range = sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).startContainer) ? sel.getRangeAt(0) : null;
+      if (!range) {
+        range = document.createRange();
+        range.setStart(el, 0);
+      }
+      range.deleteContents();
+      const fragment = parseHtml(html);
+      const last = fragment.lastChild;
+      range.insertNode(fragment);
+      if (last && sel) {
+        const after = document.createRange();
+        after.setStartAfter(last);
+        sel.removeAllRanges();
+        sel.addRange(after);
+      }
+    }
+    touched();
+  };
+
   const previousAccount = useRef(accountId);
   useEffect(() => {
     if (previousAccount.current === accountId) return;
     previousAccount.current = accountId;
     const block = editor.current?.querySelector<HTMLElement>("[data-signature]");
     if (!block) return;
+    // Signature par défaut du nouveau compte (lot T4).
     const content = signatureContent(accountId);
-    if (content) setHtml(block, content);
-    else block.remove();
+    if (!content) {
+      block.remove();
+      return;
+    }
+    block.dataset.signature = signatureMark(accountSignatures(accountId).defaultId);
+    setHtml(block, content);
   }, [accountId]);
 
   // Tant que l'utilisateur n'a rien fait, les changements d'état viennent de
@@ -489,11 +609,30 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
   /** Pièce jointe annoncée mais absente : mot trouvé (fenêtre d'avertissement ouverte). */
   const [missingAttachment, setMissingAttachment] = useState<string | null>(null);
 
+  /** Heure choisie par « Envoyer plus tard » (lot W2), gardée si l'avertissement de pièce jointe s'interpose. */
+  const later = useRef<number | null>(null);
+  /** Fenêtre « Choisir la date et l'heure » : valeur du champ, ou null si fermée. */
+  const [laterInput, setLaterInput] = useState<string | null>(null);
+
+  const sendLater = (at: number) => {
+    later.current = at;
+    void send();
+  };
+
+  const sendNow = () => {
+    later.current = null;
+    void send();
+  };
+
   const send = async (checked = false) => {
     if (sending) return;
     const built = collect();
     if (!built) return setError(t("Choisissez le compte d'envoi."));
     const { draft, attachments } = built;
+    if (later.current !== null && draft.encrypt) {
+      later.current = null;
+      return setError(t("Un message à chiffrer ne peut pas être programmé : envoyez-le maintenant."));
+    }
     if (encryption === "unavailable") return setError(unavailableText);
     if (encryption === "waiting") return setError(t("Lecture des certificats en cours : réessayez dans un instant."));
     if (draft.to.length + draft.cc.length + draft.bcc.length === 0) {
@@ -522,7 +661,9 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
     if (!runningInTauri) clearBackup(backupKey.current);
     else if (!draft.encrypt) writeBackup(backupKey.current, { accountId, draft, draftId: draftId.current });
     try {
-      await onSend(accountId, draft, init.answeredId, attachments, draftId.current);
+      const at = later.current;
+      if (at !== null && onSchedule) await onSchedule(accountId, draft, init.answeredId, attachments, draftId.current, at);
+      else await onSend(accountId, draft, init.answeredId, attachments, draftId.current);
     } catch (e) {
       closed.current = false;
       setError(String(e));
@@ -533,7 +674,7 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      void send();
+      sendNow();
     }
     if (e.key.toLowerCase() === "s" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -571,11 +712,43 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
           appearance="primary"
           icon={sending ? <Spinner size="tiny" /> : <Send20Regular />}
           disabled={sending}
-          onClick={() => send()}
+          onClick={sendNow}
           title={t("Envoyer (Ctrl+Entrée)")}
         >
           {t("Envoyer")}
         </Button>
+        {/* Envoyer plus tard (lot W2) : jamais pour un message à chiffrer. */}
+        {onSchedule && (
+          <Menu positioning="below-start">
+            <MenuTrigger disableButtonEnhancement>
+              <Button
+                appearance="primary"
+                className="send-later-btn"
+                icon={<ChevronDown16Regular />}
+                disabled={sending || encrypt}
+                aria-label={t("Envoyer plus tard")}
+                title={
+                  encrypt
+                    ? t("Un message à chiffrer ne peut pas être programmé : il n'est jamais gardé en clair.")
+                    : t("Envoyer plus tard")
+                }
+              />
+            </MenuTrigger>
+            <MenuPopover className="send-later-menu">
+              <MenuList>
+                {sendLaterChoices(new Date()).map((c) => (
+                  <MenuItem key={c.at} icon={<SendClock20Regular />} secondaryContent={longDate(c.at)} onClick={() => sendLater(c.at)}>
+                    {c.label}
+                  </MenuItem>
+                ))}
+                <MenuDivider />
+                <MenuItem onClick={() => setLaterInput(toLocalInput(new Date(Date.now() + 24 * 3600 * 1000)))}>
+                  {t("Choisir la date et l'heure…")}
+                </MenuItem>
+              </MenuList>
+            </MenuPopover>
+          </Menu>
+        )}
         <Button
           appearance="subtle"
           icon={<Save20Regular />}
@@ -753,6 +926,10 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
         plain={plain}
         onPlainChange={switchFormat}
         onAttach={() => filePicker.current?.click()}
+        signatures={signatureChoices}
+        onSignature={insertSignature}
+        templates={templateChoices}
+        onTemplate={insertTemplate}
       />
 
       <div
@@ -766,6 +943,42 @@ export function Compose({ init, accounts, onSend, onDiscard }: Props) {
         onInput={touched}
       />
       {dropping && <div className="drop-hint">{t("Déposez les fichiers pour les joindre")}</div>}
+      {laterInput !== null && (
+        <Dialog open onOpenChange={(_, d) => !d.open && setLaterInput(null)}>
+          <DialogSurface className="small-dialog">
+            <DialogBody>
+              <DialogTitle>{t("Envoyer plus tard")}</DialogTitle>
+              <DialogContent>
+                <p className="dialog-text">{t("Le message partira à cette heure si Librix Mail est ouvert, sinon à son prochain démarrage.")}</p>
+                <Input
+                  type="datetime-local"
+                  aria-label={t("Date et heure d'envoi")}
+                  value={laterInput}
+                  onChange={(_, d) => setLaterInput(d.value)}
+                />
+                {laterInput !== "" && parseSendLater(laterInput, new Date()) === null && (
+                  <p className="muted small">{t("Choisissez une heure à venir, dans l'année.")}</p>
+                )}
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => setLaterInput(null)}>{t("Annuler")}</Button>
+                <Button
+                  appearance="primary"
+                  icon={<SendClock20Regular />}
+                  disabled={parseSendLater(laterInput, new Date()) === null}
+                  onClick={() => {
+                    const at = parseSendLater(laterInput, new Date());
+                    setLaterInput(null);
+                    if (at !== null) sendLater(at);
+                  }}
+                >
+                  {t("Programmer")}
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+      )}
       {missingAttachment && (
         <Dialog open onOpenChange={(_, d) => !d.open && setMissingAttachment(null)}>
           <DialogSurface className="small-dialog">

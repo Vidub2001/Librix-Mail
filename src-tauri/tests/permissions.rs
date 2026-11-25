@@ -93,12 +93,13 @@ fn droits_exacts_des_fenetres_secondaires() {
             "open_draft",
             "save_draft",
             "save_draft_backup",
+            "schedule_send",
             "send_message",
             "smime_missing",
             "smime_signers",
             "window_bootstrap",
         ],
-        "fenêtre de rédaction : 12 commandes (lot J13 : écarter une adresse de la complétion)"
+        "fenêtre de rédaction : 13 commandes (lot W2 : programmer un envoi ; annuler un envoi, lister et retirer les messages programmés restent à la fenêtre principale)"
     );
 }
 

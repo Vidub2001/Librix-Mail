@@ -99,6 +99,14 @@ pub(crate) async fn list_messages(state: State<'_, AppState>, folder_id: String)
     .await
 }
 
+/// Conversations d'un dossier (lot U2) : celle de chaque message, et les messages envoyés qui en font partie.
+#[tauri::command]
+pub(crate) async fn folder_conversations(state: State<'_, AppState>, folder_id: String) -> CmdResult<crate::router::FolderConversations> {
+    let _timed = crate::diag::timed("folder_conversations");
+    let router = router(&state);
+    blocking(move || router.folder_conversations(&folder_id).map_err(|e| e.to_string())).await
+}
+
 /// Synchronise un dossier avec son serveur, puis renvoie la liste à jour.
 #[tauri::command]
 pub(crate) async fn sync_messages(state: State<'_, AppState>, folder_id: String) -> CmdResult<Vec<MessageSummary>> {
@@ -271,21 +279,21 @@ fn check_sources(window: &tauri::WebviewWindow, attachments: &[AttachmentInput])
 /// `report` annonce l'échec (à la fenêtre principale ; à un test, lot E5b).
 struct SendJob<R: FnMut(crate::windows::SendFailed)> {
     report: R,
-    message: Option<crate::windows::SendFailed>,
+    message: Option<crate::windows::Returned>,
 }
 
 impl<R: FnMut(crate::windows::SendFailed)> SendJob<R> {
     /// Le message, rendu à l'appelant : le garde n'annoncera plus rien.
-    fn take(&mut self) -> Option<crate::windows::SendFailed> {
+    fn take(&mut self) -> Option<crate::windows::Returned> {
         self.message.take()
     }
 }
 
 impl<R: FnMut(crate::windows::SendFailed)> Drop for SendJob<R> {
     fn drop(&mut self) {
-        if let Some(mut message) = self.message.take() {
-            tr!("Erreur interne pendant l'envoi : vérifiez « Éléments envoyés » avant de renvoyer.").clone_into(&mut message.error);
-            (self.report)(message);
+        if let Some(message) = self.message.take() {
+            let error = tr!("Erreur interne pendant l'envoi : vérifiez « Éléments envoyés » avant de renvoyer.").to_owned();
+            (self.report)(crate::windows::SendFailed { error, message });
         }
     }
 }
@@ -305,7 +313,9 @@ fn send_failed(app: &tauri::AppHandle, message: crate::windows::SendFailed) {
 /// retirée qu'une fois le message parti.
 ///
 /// `answered_id` : message auquel on répond (marqué « répondu ») ; `draft_id` :
-/// brouillon enregistré de ce message (supprimé après l'envoi).
+/// brouillon enregistré de ce message (supprimé après l'envoi) ; `delay` :
+/// secondes pendant lesquelles l'envoi peut être annulé (`cancel_send`, lot W1 ;
+/// au plus 30, et seulement avec une clé d'envoi valide).
 #[tauri::command]
 #[expect(clippy::too_many_arguments, reason = "arguments d'une commande Tauri, nommés par l'interface")]
 pub(crate) async fn send_message(
@@ -317,51 +327,184 @@ pub(crate) async fn send_message(
     answered_id: Option<MessageId>,
     attachments: Option<Vec<AttachmentInput>>,
     draft_id: Option<MessageId>,
+    delay: Option<u32>,
 ) -> CmdResult<()> {
     let router = router(&state);
     let attachments = attachments.unwrap_or_default();
     check_sources(&window, &attachments)?;
     draft.validate()?;
     let (label, cache) = (window.label().to_owned(), Arc::clone(&state.cache));
+    // Retenu avant de rendre la main : « Annuler » marche dès que la rédaction se ferme.
+    let outbox = Arc::clone(&state.held_sends);
+    let retained = match delay.filter(|&secs| secs > 0 && mail_core::compose::send_key_bytes(&draft.send_key).is_some()) {
+        // Même clé déjà retenue : ce message est déjà en route (double envoi).
+        Some(secs) => match outbox.hold(&draft.send_key) {
+            Some(flag) => Some((flag, std::time::Duration::from_secs(u64::from(secs)))),
+            None => return Err(tr!("Ce message est déjà en attente d'envoi.").into()),
+        },
+        None => None,
+    };
     std::thread::spawn(move || {
-        // Le message reste dans le garde pendant l'envoi, qui ne fait que le lire :
-        // aucune copie, et il est rendu à la rédaction même si l'envoi panique.
-        let panicked = app.clone();
-        let mut job = SendJob {
-            report: move |message| send_failed(&panicked, message),
-            message: Some(crate::windows::SendFailed {
-                error: String::new(),
-                account_id,
-                draft,
-                attachments,
-                answered_id,
-                draft_id,
-                window: label,
-            }),
-        };
-        let Some(pending) = job.message.as_ref() else { return };
-        let result = router.send(&pending.account_id, &pending.draft, answered_id, &pending.attachments, draft_id);
-        let Some(mut message) = job.take() else { return };
-        match result {
-            Ok(report) => {
-                crate::windows::drop_backup(&cache, &message.window);
-                // Destinataires proposés à la complétion (lot J13) ; un échec
-                // ici ne change rien à l'envoi, déjà fait.
-                if let Err(e) = crate::pim::note_sent(&cache, &message.account_id, &message.draft) {
-                    crate::diag::report(&e);
-                }
-                crate::windows::send_succeeded(&app, &report, message.account_id, answered_id);
-                if draft_id.is_some() {
-                    crate::windows::drafts_changed(&app);
-                }
-            }
-            Err(e) => {
-                message.error = e.to_string();
-                send_failed(&app, message);
+        let message = crate::windows::Returned { account_id, draft, attachments, answered_id, draft_id, window: label };
+        if let Some((flag, delay)) = retained {
+            if outbox.wait(&message.draft.send_key, &flag, delay) == crate::outbox::Outcome::Cancelled {
+                // Annulé : rien n'est parti ; la rédaction est rouverte, sans erreur
+                // ni notification du bureau (c'est l'utilisateur qui l'a demandé).
+                crate::windows::send_cancelled(&app, crate::windows::SendCancelled { message });
+                return;
             }
         }
+        deliver(&app, &router, &cache, message);
     });
     Ok(())
+}
+
+/// Envoie un message (rédaction, ou message programmé arrivé à son heure,
+/// lot W2) et annonce le résultat à la fenêtre principale : envoyé (`sent`),
+/// ou rendu à la rédaction (`sendFailed`), même si l'envoi panique. Tourne
+/// dans le fil de l'appelant (un fil d'envoi, jamais celui de l'interface).
+pub(crate) fn deliver(app: &tauri::AppHandle, router: &Router, cache: &Arc<Mutex<Cache>>, message: crate::windows::Returned) {
+    let (answered_id, draft_id) = (message.answered_id, message.draft_id);
+    // Le message reste dans le garde pendant l'envoi, qui ne fait que le lire :
+    // aucune copie, et il est rendu à la rédaction même si l'envoi panique.
+    let panicked = app.clone();
+    let mut job = SendJob { report: move |failed| send_failed(&panicked, failed), message: Some(message) };
+    let Some(pending) = job.message.as_ref() else { return };
+    let result = router.send(&pending.account_id, &pending.draft, answered_id, &pending.attachments, draft_id);
+    let Some(message) = job.take() else { return };
+    match result {
+        Ok(report) => {
+            // Message programmé (lot W2) : pas de fenêtre, donc pas de copie de secours.
+            if !message.window.is_empty() {
+                crate::windows::drop_backup(cache, &message.window);
+            }
+            // Destinataires proposés à la complétion (lot J13) ; un échec
+            // ici ne change rien à l'envoi, déjà fait.
+            if let Err(e) = crate::pim::note_sent(cache, &message.account_id, &message.draft) {
+                crate::diag::report(&e);
+            }
+            crate::windows::send_succeeded(app, &report, message.account_id, answered_id);
+            if draft_id.is_some() {
+                crate::windows::drafts_changed(app);
+            }
+        }
+        Err(e) => send_failed(app, crate::windows::SendFailed { error: e.to_string(), message }),
+    }
+}
+
+// ------------------------------------------------------------------ messages programmés (lot W2)
+
+/// Message programmé, tel que la fenêtre principale le liste.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScheduledItem {
+    id: i64,
+    account_id: String,
+    /// Heure d'envoi, en secondes Unix.
+    send_at: i64,
+    subject: String,
+    to: Vec<String>,
+}
+
+/// Programme un message pour `send_at` (secondes Unix, au plus un an plus
+/// tard ; une heure à peine passée l'envoie au prochain passage). Il est
+/// gardé dans le cache chiffré et envoyé par [`crate::scheduled`] ; la copie
+/// de secours de la fenêtre est retirée. Refusé pour un message à chiffrer :
+/// il n'est jamais gardé en clair, même dans le cache (décision du 24 novembre 2026).
+#[tauri::command]
+#[expect(clippy::too_many_arguments, reason = "arguments d'une commande Tauri, nommés par l'interface")]
+pub(crate) async fn schedule_send(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    account_id: String,
+    draft: Draft,
+    answered_id: Option<MessageId>,
+    attachments: Option<Vec<AttachmentInput>>,
+    send_at: i64,
+) -> CmdResult<i64> {
+    let attachments = attachments.unwrap_or_default();
+    check_sources(&window, &attachments)?;
+    draft.validate()?;
+    if draft.encrypt {
+        return Err(tr!("Un message à chiffrer ne peut pas être programmé : envoyez-le maintenant.").into());
+    }
+    let now = crate::scheduled::now();
+    if send_at < now - crate::scheduled::GRACE || send_at > now + crate::scheduled::MAX_AHEAD {
+        return Err(tr!("Heure d'envoi invalide : choisissez une heure à venir, dans l'année.").into());
+    }
+    let label = window.label().to_owned();
+    let message = crate::windows::Returned { account_id, draft, attachments, answered_id, draft_id: None, window: String::new() };
+    let data = serde_json::to_string(&message).map_err(|e| e.to_string())?;
+    let cache = cache(&state);
+    let id = blocking(move || {
+        let mut c = lock_cache(&cache);
+        let id = c.scheduled_put(&message.account_id, send_at, &data)?;
+        // Le message est gardé : la copie de secours de la rédaction ne sert plus.
+        if let Err(e) = c.backup_remove(&label) {
+            crate::diag::report(&e);
+        }
+        Ok(id)
+    })
+    .await?;
+    crate::windows::scheduled_changed(&app, Some(send_at));
+    Ok(id)
+}
+
+/// Messages programmés, du plus proche au plus lointain.
+#[tauri::command]
+pub(crate) async fn scheduled_list(state: State<'_, AppState>) -> CmdResult<Vec<ScheduledItem>> {
+    let cache = cache(&state);
+    blocking(move || {
+        let rows = lock_cache(&cache).scheduled_all()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let message: crate::windows::Returned = serde_json::from_str(&row.data)
+                    .inspect_err(|e| crate::diag::report(&format!("message programmé illisible : {e}")))
+                    .ok()?;
+                Some(ScheduledItem {
+                    id: row.id,
+                    account_id: row.account,
+                    send_at: row.send_at,
+                    subject: message.draft.subject,
+                    to: message.draft.to,
+                })
+            })
+            .collect())
+    })
+    .await
+}
+
+/// Retire un message programmé et le rend (pour le modifier, ou rien pour le
+/// supprimer) ; `None` s'il est déjà parti.
+#[tauri::command]
+pub(crate) async fn unschedule(state: State<'_, AppState>, app: tauri::AppHandle, id: i64) -> CmdResult<Option<crate::windows::Returned>> {
+    let cache = cache(&state);
+    let row = blocking(move || lock_cache(&cache).scheduled_take(id)).await?;
+    crate::windows::scheduled_changed(&app, None);
+    row.map(|row| serde_json::from_str(&row.data).map_err(|e| e.to_string())).transpose()
+}
+
+/// Envoie tout de suite un message programmé (en arrière-plan, comme un envoi
+/// ordinaire) ; `false` s'il est déjà parti.
+#[tauri::command]
+pub(crate) async fn send_scheduled_now(state: State<'_, AppState>, id: i64) -> CmdResult<bool> {
+    let cache = cache(&state);
+    let found = blocking(move || lock_cache(&cache).scheduled_reschedule(id, 0)).await?;
+    if found {
+        crate::scheduled::wake();
+    }
+    Ok(found)
+}
+
+/// Annule un envoi encore retenu par son délai (lot W1) ; `false` s'il est
+/// déjà parti. Le message annulé revient à la fenêtre principale
+/// (`sendCancelled`), qui rouvre la rédaction.
+#[tauri::command]
+#[expect(clippy::needless_pass_by_value, reason = "Tauri ne passe l'état et les arguments que par valeur")]
+pub(crate) fn cancel_send(state: State<'_, AppState>, send_key: String) -> bool {
+    state.held_sends.cancel(&send_key)
 }
 
 // ------------------------------------------------------------------ brouillons
@@ -1707,9 +1850,8 @@ mod tests {
         .expect("compte de test")
     }
 
-    fn pending(error: &str) -> crate::windows::SendFailed {
-        crate::windows::SendFailed {
-            error: error.into(),
+    fn pending() -> crate::windows::Returned {
+        crate::windows::Returned {
             account_id: "a1".into(),
             draft: Draft::default(),
             attachments: Vec::new(),
@@ -1724,19 +1866,19 @@ mod tests {
         // Lot E5b : une panique pendant l'envoi rend le message à la rédaction.
         let reported = std::cell::RefCell::new(Vec::new());
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _job = SendJob { report: |m: crate::windows::SendFailed| reported.borrow_mut().push(m), message: Some(pending("")) };
+            let _job = SendJob { report: |m: crate::windows::SendFailed| reported.borrow_mut().push(m), message: Some(pending()) };
             std::panic::resume_unwind(Box::new("panne simulée"));
         }));
         assert!(outcome.is_err());
         let reported = reported.into_inner();
         assert_eq!(reported.len(), 1, "échec annoncé une fois");
         assert!(reported[0].error.contains("Éléments envoyés"), "{}", reported[0].error);
-        assert_eq!(reported[0].window, "compose-1", "rendu à la bonne fenêtre");
+        assert_eq!(reported[0].message.window, "compose-1", "rendu à la bonne fenêtre");
 
         // Message repris par l'envoi (réussi ou échoué normalement) : le garde se tait.
         let mut silent = Vec::new();
         {
-            let mut job = SendJob { report: |m: crate::windows::SendFailed| silent.push(m), message: Some(pending("")) };
+            let mut job = SendJob { report: |m: crate::windows::SendFailed| silent.push(m), message: Some(pending()) };
             assert!(job.take().is_some());
         }
         assert!(silent.is_empty());

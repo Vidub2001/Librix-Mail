@@ -321,6 +321,11 @@ pub(super) static EN: &[(&str, &str)] = &[
     ("liste illisible", "unreadable list"),
     ("{n} nouveaux messages", "{n} new messages"),
     ("Message non envoyé", "Message not sent"),
+    // Annuler l'envoi (lot W1).
+    ("Ce message est déjà en attente d'envoi.", "This message is already waiting to be sent."),
+    // Envoyer plus tard (lot W2).
+    ("Un message à chiffrer ne peut pas être programmé : envoyez-le maintenant.", "A message to encrypt cannot be scheduled: send it now."),
+    ("Heure d'envoi invalide : choisissez une heure à venir, dans l'année.", "Invalid sending time: choose a time to come, within the year."),
     // Proton Mail Bridge, certificat épinglé (lot I3).
     ("{label} : un certificat épinglé n'est admis que pour Proton Mail Bridge, sur cet ordinateur (127.0.0.1).", "{label}: a pinned certificate is only allowed for Proton Mail Bridge, on this computer (127.0.0.1)."),
     ("{label} : empreinte de certificat invalide", "{label}: invalid certificate fingerprint"),
