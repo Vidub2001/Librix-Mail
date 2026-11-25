@@ -810,6 +810,24 @@ fn collect_sent_history(conn: &Connection) -> Res<()> {
     tx.commit().map_err(sql)
 }
 
+/// Préfixe des réglages écrits par les versions précédentes (ancien nom technique).
+const OLD_PREF_PREFIX: &str = "vortex.";
+/// Préfixe des réglages, à la place de [`OLD_PREF_PREFIX`].
+const PREF_PREFIX: &str = "librix.";
+
+/// Reprend sous [`PREF_PREFIX`] les réglages des versions précédentes. Un
+/// réglage déjà présent sous le nouveau nom l'emporte ; l'ancien est retiré.
+fn take_over_old_prefs(conn: &Connection) -> Res<()> {
+    let old_keys = "substr(key, 1, length(?1)) = ?1";
+    conn.execute(
+        &format!("UPDATE OR IGNORE prefs SET key = ?2 || substr(key, length(?1) + 1) WHERE {old_keys}"),
+        params![OLD_PREF_PREFIX, PREF_PREFIX],
+    )
+    .map_err(sql)?;
+    conn.execute(&format!("DELETE FROM prefs WHERE {old_keys}"), params![OLD_PREF_PREFIX]).map_err(sql)?;
+    Ok(())
+}
+
 impl Cache {
     pub fn open(path: &Path) -> Res<Self> {
         if let Some(dir) = path.parent() {
@@ -855,6 +873,7 @@ impl Cache {
 
     fn init(conn: Connection) -> Res<Self> {
         conn.execute_batch(SCHEMA).map_err(sql)?;
+        take_over_old_prefs(&conn)?;
         // Requêtes préparées gardées (audit P7) : de quoi tenir les plus fréquentes.
         conn.set_prepared_statement_cache_capacity(64);
         // Migration : ajoute les colonnes manquantes d'une base plus ancienne.
@@ -2403,6 +2422,27 @@ mod tests {
     }
 
     #[test]
+    fn reglages_des_versions_precedentes_repris() {
+        let c = Cache::in_memory().unwrap();
+        let old = |name: &str| format!("{OLD_PREF_PREFIX}{name}");
+        c.conn.execute("INSERT INTO prefs (key, value) VALUES (?1, 'ancien')", params![old("rules")]).unwrap();
+        c.conn.execute("INSERT INTO prefs (key, value) VALUES (?1, 'ancien')", params![old("mail")]).unwrap();
+        c.conn.execute("INSERT INTO prefs (key, value) VALUES ('librix.mail', 'nouveau')", params![]).unwrap();
+        take_over_old_prefs(&c.conn).unwrap();
+        let got = c.prefs(&["librix.mail", "librix.rules"]).unwrap();
+        assert_eq!(
+            got,
+            vec![("librix.mail".to_string(), "nouveau".to_string()), ("librix.rules".into(), "ancien".into())],
+            "ancien réglage repris, sauf s'il existe déjà sous le nouveau nom"
+        );
+        let left: i64 = c
+            .conn
+            .query_row("SELECT count(*) FROM prefs WHERE substr(key, 1, length(?1)) = ?1", params![OLD_PREF_PREFIX], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "plus aucun ancien réglage");
+    }
+
+    #[test]
     fn s8_regles_et_signatures_dans_le_cache() {
         let mut c = Cache::in_memory().unwrap();
         assert_eq!(c.prefs(&["librix.rules"]).unwrap(), Vec::<(String, String)>::new());
@@ -3093,7 +3133,7 @@ mod tests {
 
     /// Dossier de test propre au test `name`.
     fn g4_file(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("vx-g4-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lx-g4-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir.join("cache.sqlite")
     }

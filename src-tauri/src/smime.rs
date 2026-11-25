@@ -31,8 +31,8 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
 use crate::config::AccountConfig;
 
-use serde::{Deserialize, Serialize};
 use librix_smime::{Anchors, Context, Coverage, DigitalSignature, Revocation, Revocations, Signed, SignedKind, Verdict, Why};
+use serde::{Deserialize, Serialize};
 
 /// Certificats pris au plus parmi les autorités (système et utilisateur).
 const MAX_ANCHORS: usize = 4_000;

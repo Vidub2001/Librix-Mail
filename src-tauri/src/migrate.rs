@@ -1,11 +1,12 @@
-//! Reprise des données des versions précédentes, nommées « `LibrixMail` » :
-//! dossiers de l'identifiant `fr.librixmail.app` (comptes, cache du courrier,
-//! réglages et stockage du moteur web) renommés en `fr.librixmail.app`.
+//! Reprise des données des versions précédentes : dossiers de l'ancien
+//! identifiant (comptes, cache du courrier, réglages et stockage du moteur web)
+//! renommés en `fr.librixmail.app`.
 //! Fait au tout début du démarrage, avant que Tauri n'ouvre ces dossiers.
 
 use std::path::{Path, PathBuf};
 
-const OLD_ID: &str = "fr.librixmail.app";
+/// Identifiant des versions précédentes (ancien nom technique de l'application).
+const OLD_ID: &str = "fr.vortexmail.client";
 const NEW_ID: &str = "fr.librixmail.app";
 
 /// Dossiers de base où Tauri range les dossiers de l'application (config, données, cache).

@@ -228,7 +228,7 @@ export function BackupSection({ accountCount }: { accountCount: number }) {
           <input
             ref={fileInput}
             type="file"
-            accept=".vxbackup"
+            accept=".lxbackup,.vxbackup"
             hidden
             onChange={(e) => {
               void pickFile(e.target.files?.[0]);

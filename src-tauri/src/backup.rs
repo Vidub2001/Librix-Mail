@@ -13,7 +13,7 @@ use crate::config::{self, AccountConfig, AuthMethod};
 use crate::json::{self, Json};
 use crate::router::lock_cache;
 
-pub(crate) const EXTENSION: &str = "vxbackup";
+pub(crate) const EXTENSION: &str = "lxbackup";
 
 /// Entrée du trousseau sauvegardée telle quelle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +68,7 @@ pub(crate) fn to_payload(s: &Snapshot) -> Result<String, String> {
         })
         .collect();
     Ok(Json::obj([
-        ("app", "Librix Mail".into()),
+        ("app", APP.into()),
         ("created", s.created.into()),
         ("accounts", accounts),
         ("secrets", secrets.into()),
@@ -78,9 +78,14 @@ pub(crate) fn to_payload(s: &Snapshot) -> Result<String, String> {
     .to_text())
 }
 
+/// Application inscrite dans les sauvegardes.
+const APP: &str = "Librix Mail";
+/// Application inscrite par les versions précédentes (ancien nom).
+const OLD_APP: &str = "Vortex Mail";
+
 pub(crate) fn from_payload(text: &str) -> Result<Snapshot, String> {
     let v = json::parse(text).map_err(|_| tr!("Sauvegarde illisible.").to_string())?;
-    if v.get("app").text() != "Librix Mail" {
+    if ![APP, OLD_APP].contains(&v.get("app").text()) {
         return Err(tr!("Sauvegarde illisible.").into());
     }
     let accounts = v.get("accounts");
@@ -177,7 +182,7 @@ fn known_entries(configs: &[AccountConfig]) -> Vec<(String, String)> {
 }
 
 /// Au démarrage : lit une fois chaque entrée connue, ce qui reprend tout de
-/// suite celles des versions précédentes (service `librixmail`), même les
+/// suite celles des versions précédentes (ancien nom de service), même les
 /// entrées rarement lues comme l'ID d'application.
 pub(crate) fn take_over_old_keyring(configs: &[AccountConfig]) {
     for (key, label) in known_entries(configs) {
@@ -217,7 +222,7 @@ fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
-/// Nom de fichier libre dans `dir` : « Librix Mail - sauvegarde AAAA-MM-JJ.vxbackup ».
+/// Nom de fichier libre dans `dir` : « Librix Mail - sauvegarde AAAA-MM-JJ.lxbackup ».
 pub(crate) fn file_name(dir: &Path, stamp: &str) -> PathBuf {
     let date = format!("{}-{}-{}", &stamp[0..4], &stamp[4..6], &stamp[6..8]);
     let base = format!("Librix Mail - sauvegarde {date}");
@@ -285,6 +290,9 @@ pub(crate) fn read(content: &str, password: &str) -> Result<Preview, String> {
     Ok(Preview { accounts, snapshot })
 }
 
+/// Préfixe des réglages dans les sauvegardes des versions précédentes (ancien nom technique).
+const OLD_SETTINGS_PREFIX: &str = "vortex.";
+
 /// Ne garde d'une sauvegarde que ce que l'application y met elle-même : les
 /// entrées du trousseau de ses comptes (avec leur libellé habituel) et les
 /// réglages `librix.*`. Une sauvegarde fabriquée n'écrit aucune autre entrée.
@@ -299,6 +307,15 @@ fn screen(accounts: &[AccountConfig], mut snapshot: Snapshot) -> Snapshot {
                 label: label.clone(),
                 value: s.value,
             })
+        })
+        .collect();
+    // Réglages d'une sauvegarde plus ancienne : repris sous leur nom actuel.
+    snapshot.settings = snapshot
+        .settings
+        .into_iter()
+        .map(|(key, value)| match key.strip_prefix(OLD_SETTINGS_PREFIX) {
+            Some(rest) => (format!("librix.{rest}"), value),
+            None => (key, value),
         })
         .collect();
     snapshot.settings.retain(|(key, _)| key.starts_with("librix."));
@@ -359,10 +376,15 @@ mod tests {
             Secret { key: "ssh/github".into(), label: "x".into(), value: "piège".into() },
         ];
         s.settings.push(("autre.cle".into(), "x".into()));
+        s.settings.push((format!("{OLD_SETTINGS_PREFIX}unifiedView"), "true".into()));
         let kept = screen(&[], s);
         assert_eq!(kept.secrets, vec![Secret { key, label, value: "id".into() }]);
-        assert_eq!(kept.settings.len(), 2);
+        assert_eq!(kept.settings.len(), 3);
         assert!(kept.settings.iter().all(|(k, _)| k.starts_with("librix.")));
+        assert!(
+            kept.settings.contains(&("librix.unifiedView".to_string(), "true".to_string())),
+            "réglage d'une ancienne sauvegarde repris"
+        );
     }
 
     fn sample() -> Snapshot {
@@ -399,6 +421,13 @@ mod tests {
     }
 
     #[test]
+    fn sauvegardes_des_versions_precedentes_lisibles() {
+        let text = to_payload(&sample()).unwrap().replace(&format!(r#""app":"{APP}""#), &format!(r#""app":"{OLD_APP}""#));
+        assert!(text.contains(OLD_APP));
+        assert_eq!(from_payload(&text).unwrap().settings, sample().settings, "ancienne sauvegarde toujours importée");
+    }
+
+    #[test]
     fn sealed_backup_opens_with_the_password() {
         let text = to_payload(&sample()).unwrap();
         let file = crate::crypto::seal_with("mot de passe solide", text.as_bytes(), 1000).unwrap();
@@ -431,12 +460,12 @@ mod tests {
 
     #[test]
     fn file_names_do_not_overwrite() {
-        let dir = std::env::temp_dir().join(format!("vx-backup-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lx-backup-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let first = file_name(&dir, "20261104T130000Z");
-        assert_eq!(first.file_name().unwrap(), "Librix Mail - sauvegarde 2026-11-04.vxbackup");
+        assert_eq!(first.file_name().unwrap(), "Librix Mail - sauvegarde 2026-11-04.lxbackup");
         std::fs::write(&first, b"x").unwrap();
-        assert_eq!(file_name(&dir, "20261104T130000Z").file_name().unwrap(), "Librix Mail - sauvegarde 2026-11-04 (2).vxbackup");
+        assert_eq!(file_name(&dir, "20261104T130000Z").file_name().unwrap(), "Librix Mail - sauvegarde 2026-11-04 (2).lxbackup");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -369,20 +369,21 @@ entrées (`clé#1`, `clé#2`…) et réassemblés automatiquement.
 Les changer ferait perdre comptes, cache et mots de passe à toutes les installations existantes,
 sauf à prévoir une migration.
 
-### Reprise des installations « LibrixMail »
+### Reprise des installations précédentes
 
-Les premières versions s'appelaient LibrixMail (identifiant `fr.librixmail.app`, service du
-trousseau `librixmail`). Au premier démarrage d'une version renommée, tout est repris sans action :
+Les versions précédentes utilisaient un autre identifiant et un autre service du trousseau. Au
+premier démarrage d'une version récente, tout est repris sans action :
 
-- les dossiers `fr.librixmail.app` (comptes, cache, réglages de l'interface) sont renommés en
+- les dossiers de l'ancien identifiant (comptes, cache, réglages de l'interface) sont renommés en
   `fr.librixmail.app`, sauf si le nouveau dossier contient déjà des données (rien n'est écrasé) ;
-- chaque mot de passe ou jeton est recopié du service `librixmail` vers `librixmail` à sa première
+- chaque mot de passe ou jeton est recopié de l'ancien service vers `librixmail` à sa première
   lecture, puis l'ancienne entrée est supprimée ;
-- les réglages `librixmail.*` du stockage de l'interface deviennent `librix.*`.
+- les réglages de l'interface et du cache prennent le préfixe `librix.*` ;
+- les sauvegardes `.vxbackup` faites avec les versions précédentes restent importables.
 
 ### Passer d'une machine à l'autre
 
-Paramètres → **Sauvegarde** → Exporter : un fichier `.vxbackup` chiffré par mot de passe (comptes,
+Paramètres → **Sauvegarde** → Exporter : un fichier `.lxbackup` chiffré par mot de passe (comptes,
 mots de passe, connexions Outlook.com et Google, réglages, agenda et contacts locaux). Sur l'autre
 installation, Linux ou Windows : Paramètres → Sauvegarde → Importer.
 
@@ -401,7 +402,7 @@ La version affichée et celle des installateurs viennent de `"version"` dans
 | `npm : Impossible de charger le fichier … npm.ps1` (Windows) | Scripts PowerShell désactivés | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | `npm warn install-scripts … esbuild` | Script d'installation bloqué par npm | `npm install-scripts approve esbuild` puis `npm rebuild esbuild` |
 | `Your local changes to the following files would be overwritten by merge: package.json` (git pull) | `package.json` modifié par npm sur cette machine | `git checkout -- package.json` puis `git pull` |
-| Compilation de `librixmail` / `librixmail.exe` produit | Sources pas à jour (`git pull` en échec) | Corriger le `git pull`, vérifier `git log -1 --oneline`, recompiler |
+| L'exécutable produit porte un ancien nom | Sources pas à jour (`git pull` en échec) | Corriger le `git pull`, vérifier `git log -1 --oneline`, recompiler |
 | `l'exécution de scripts est désactivée` (`portable.ps1`) | Scripts PowerShell désactivés | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | `0x800704c7 : L'opération a été annulée` (winget) | Installation interrompue (lignes collées à la suite, fenêtre d'autorisation fermée) | Relancer la commande seule |
 | `Failed when opening source(s)` / `0x8a15000f` (winget) | Catalogue winget absent ou réseau sans DNS | Vérifier le DNS (`Resolve-DnsName github.com`), puis `winget source reset --force` et `winget source update` |

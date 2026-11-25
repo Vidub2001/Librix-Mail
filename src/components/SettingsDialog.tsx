@@ -115,14 +115,6 @@ const AUTH_OPTIONS: { value: AuthMethod; label: string }[] = [
   { value: "oauth2", label: t("OAuth2 (connexion par le navigateur)") },
 ];
 
-// L'ID d'application est désormais gardé dans le trousseau du système :
-// on efface l'ancienne copie qu'une version précédente laissait dans le navigateur.
-try {
-  localStorage.removeItem("librixmail.microsoftClientId");
-} catch {
-  // stockage indisponible : rien à effacer
-}
-
 
 const DEFAULT_PORTS: Record<"imap" | "smtp", Record<Security, number>> = {
   imap: { sslTls: 993, startTls: 143, auto: 993, none: 143 },

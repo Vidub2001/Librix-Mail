@@ -368,20 +368,21 @@ Tokens too long for the Windows credential store are split over several entries
 Changing them would lose accounts, cache and passwords for every existing installation,
 unless a migration is planned.
 
-### Taking over "LibrixMail" installations
+### Taking over earlier installations
 
-The first versions were called LibrixMail (identifier `fr.librixmail.app`, keyring service
-`librixmail`). On the first start of a renamed version, everything is taken over with no action:
+Earlier versions used another identifier and another keyring service. On the first start of a
+recent version, everything is taken over with no action:
 
-- the `fr.librixmail.app` folders (accounts, cache, interface settings) are renamed to
+- the folders of the former identifier (accounts, cache, interface settings) are renamed to
   `fr.librixmail.app`, unless the new folder already holds data (nothing is overwritten);
-- each password or token is copied from the `librixmail` service to `librixmail` the first time
-  it is read, then the old entry is deleted;
-- the `librixmail.*` settings of the interface storage become `librix.*`.
+- each password or token is copied from the former service to `librixmail` the first time it is
+  read, then the old entry is removed;
+- interface and cache settings take the `librix.*` prefix;
+- `.vxbackup` backups made with earlier versions can still be imported.
 
 ### Moving from one machine to another
 
-Settings → **Backup** → Export: a password-encrypted `.vxbackup` file (accounts,
+Settings → **Backup** → Export: a password-encrypted `.lxbackup` file (accounts,
 passwords, Outlook.com and Google connections, settings, local calendar and contacts). On the
 other installation, Linux or Windows: Settings → Backup → Import.
 
@@ -400,7 +401,7 @@ The displayed version and that of the installers come from `"version"` in
 | `npm : File … npm.ps1 cannot be loaded` (Windows) | PowerShell scripts disabled | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | `npm warn install-scripts … esbuild` | Install script blocked by npm | `npm install-scripts approve esbuild` then `npm rebuild esbuild` |
 | `Your local changes to the following files would be overwritten by merge: package.json` (git pull) | `package.json` changed by npm on this machine | `git checkout -- package.json` then `git pull` |
-| `librixmail` / `librixmail.exe` built | Sources not up to date (`git pull` failed) | Fix the `git pull`, check `git log -1 --oneline`, build again |
+| The built executable has a former name | Sources not up to date (`git pull` failed) | Fix the `git pull`, check `git log -1 --oneline`, build again |
 | `running scripts is disabled` (`portable.ps1`) | PowerShell scripts disabled | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | `0x800704c7 : The operation was canceled` (winget) | Installation interrupted (lines pasted one after the other, permission window closed) | Run the command again on its own |
 | `Failed when opening source(s)` / `0x8a15000f` (winget) | winget catalogue missing or network without DNS | Check DNS (`Resolve-DnsName github.com`), then `winget source reset --force` and `winget source update` |

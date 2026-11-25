@@ -369,20 +369,21 @@ entradas (`clave#1`, `clave#2`…) y se recomponen automáticamente.
 Cambiarlos haría perder cuentas, caché y contraseñas en todas las instalaciones existentes,
 salvo que se prevea una migración.
 
-### Recuperación de las instalaciones «LibrixMail»
+### Recuperación de las instalaciones anteriores
 
-Las primeras versiones se llamaban LibrixMail (identificador `fr.librixmail.app`, servicio del
-llavero `librixmail`). En el primer arranque de una versión renombrada, todo se recupera sin hacer nada:
+Las versiones anteriores usaban otro identificador y otro servicio del llavero. En el primer
+arranque de una versión reciente, todo se recupera sin hacer nada:
 
-- las carpetas `fr.librixmail.app` (cuentas, caché, ajustes de la interfaz) se renombran a
+- las carpetas del identificador anterior (cuentas, caché, ajustes de la interfaz) se renombran a
   `fr.librixmail.app`, salvo si la nueva carpeta ya contiene datos (no se sobrescribe nada);
-- cada contraseña o token se copia del servicio `librixmail` a `librixmail` la primera vez que se
-  lee, y después se borra la entrada antigua;
-- los ajustes `librixmail.*` del almacenamiento de la interfaz pasan a ser `librix.*`.
+- cada contraseña o token se copia del servicio anterior a `librixmail` la primera vez que se lee,
+  y luego se borra la entrada antigua;
+- los ajustes de la interfaz y de la caché adoptan el prefijo `librix.*`;
+- las copias `.vxbackup` hechas con versiones anteriores siguen pudiéndose importar.
 
 ### Pasar de una máquina a otra
 
-Configuración → **Copia de seguridad** → Exportar: un archivo `.vxbackup` cifrado con contraseña
+Configuración → **Copia de seguridad** → Exportar: un archivo `.lxbackup` cifrado con contraseña
 (cuentas, contraseñas, conexiones de Outlook.com y Google, ajustes, calendario y contactos locales).
 En la otra instalación, Linux o Windows: Configuración → Copia de seguridad → Importar.
 
@@ -401,7 +402,7 @@ La versión mostrada y la de los instaladores vienen de `"version"` en
 | `npm : No se puede cargar el archivo … npm.ps1` (Windows) | Scripts de PowerShell deshabilitados | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | `npm warn install-scripts … esbuild` | Script de instalación bloqueado por npm | `npm install-scripts approve esbuild` y luego `npm rebuild esbuild` |
 | `Your local changes to the following files would be overwritten by merge: package.json` (git pull) | `package.json` modificado por npm en esta máquina | `git checkout -- package.json` y luego `git pull` |
-| Se genera `librixmail` / `librixmail.exe` | Código fuente desactualizado (`git pull` fallido) | Corregir el `git pull`, comprobar `git log -1 --oneline`, volver a compilar |
+| El ejecutable generado lleva un nombre anterior | Código fuente desactualizado (`git pull` fallido) | Corregir el `git pull`, comprobar `git log -1 --oneline`, volver a compilar |
 | `la ejecución de scripts está deshabilitada` (`portable.ps1`) | Scripts de PowerShell deshabilitados | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | `0x800704c7 : Se canceló la operación` (winget) | Instalación interrumpida (líneas pegadas seguidas, ventana de autorización cerrada) | Volver a ejecutar el comando solo |
 | `Failed when opening source(s)` / `0x8a15000f` (winget) | Catálogo de winget ausente o red sin DNS | Comprobar el DNS (`Resolve-DnsName github.com`), y luego `winget source reset --force` y `winget source update` |

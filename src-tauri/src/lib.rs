@@ -350,7 +350,7 @@ fn on_event(app: &tauri::AppHandle, event: &tauri::RunEvent) {
 pub fn run() {
     // Mesure du démarrage (lot E2) : `LIBRIX_MESURE=1` écrit chaque étape sur la sortie d'erreur.
     diag::start_measure();
-    // Avant tout accès aux dossiers de l'application : reprise des données « LibrixMail »
+    // Avant tout accès aux dossiers de l'application : reprise des données des versions précédentes
     // (sans objet en mode portable : tout est dans le dossier `data`).
     if !portable::is_portable() {
         migrate::rename_data_dirs();

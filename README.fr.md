@@ -7,6 +7,8 @@
 **Tous vos comptes mail dans une seule boîte de réception, avec l'agenda et les contacts.**<br>
 Client de messagerie libre pour Linux et Windows, écrit en Rust avec Tauri.
 
+*Vortex Mail s'appelle désormais Librix Mail.*
+
 [![Release](https://img.shields.io/github/v/release/Vidub2001/Librix-Mail?color=1976d2)](https://github.com/Vidub2001/Librix-Mail/releases/latest)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-3cc48a)](LICENSE)
 ![Linux | Windows](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-0b2545)
@@ -207,7 +209,7 @@ réglages du compte ; ils sont rangés dans le trousseau et ne sont plus jamais 
 | Mode portable | — | dossier `data\` à côté de l'exécutable |
 
 Le cache peut être supprimé sans risque : il est reconstruit depuis les serveurs. Les
-installations faites sous l'ancien nom (LibrixMail) sont reprises automatiquement au premier
+installations faites par les versions précédentes sont reprises automatiquement au premier
 démarrage.
 
 ## Organisation du projet
@@ -240,7 +242,7 @@ src-tauri/               couche Tauri (Rust)
   src/secrets.rs         mots de passe et jetons dans le trousseau (ou le coffre portable)
   src/crypto.rs          chiffrement des sauvegardes
   src/backup.rs          export / import de la configuration
-  src/migrate.rs         reprise des installations LibrixMail
+  src/migrate.rs         reprise des installations précédentes
   src/portable.rs        mode portable (marqueur portable.txt, dossier data)
   src/windows.rs         création des fenêtres
   src/i18n.rs, locales/  langue des messages produits par le backend (macro tr!)
@@ -318,7 +320,7 @@ Librix Mail est développé avec une aide importante de l'IA générative : une 
 
 ## Téléchargement et signature
 
-Les versions sont construites à partir de ce dépôt par GitHub Actions et publiées dans la page des versions (Releases), avec l'empreinte SHA-256 de chaque fichier (`SHA256SUMS`). Les fichiers Windows ne sont pas encore signés. Une fois la candidature à SignPath Foundation acceptée : free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). Voir la [politique de signature](CODE_SIGNING.md).
+Les versions sont construites à partir de ce dépôt par GitHub Actions et publiées dans la page des versions (Releases), avec l'empreinte SHA-256 de chaque fichier (`SHA256SUMS`), signée par la clé GPG « Librix Mail (versions) » ([`docs/cle-versions.asc`](docs/cle-versions.asc), empreinte `3AA4 3687 38D2 5560 D38F  FA8C AECA 22C8 CA23 A542`) : `gpg --verify SHA256SUMS.asc SHA256SUMS`. Les fichiers Windows ne sont pas encore signés. Une fois la candidature à SignPath Foundation acceptée : free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). Voir la [politique de signature](CODE_SIGNING.md).
 
 ## Remerciements
 

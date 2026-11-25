@@ -1,4 +1,4 @@
-Fichiers de test du lot D2/D3 de Librix Mail, faits avec OpenSSL 3 :
+Fichiers de test du lot D2/D3 de Vortex Mail, faits avec OpenSSL 3 :
 - bob.key.der (PKCS #8) et bob.cert.der : RSA 2048, bob@example.org, auto-signé, 100 ans ;
 - content.txt : le contenu chiffré ;
 - enveloped-aes256.der (RSA PKCS #1 v1.5, AES-256-CBC), enveloped-oaep.der (RSAES-OAEP SHA-256, AES-128-CBC),

@@ -300,6 +300,9 @@ pub(crate) fn chacha20(key: &[u8; 32], nonce: &[u8; 12], counter: u32, data: &[u
 // ================================================================ fichier de sauvegarde
 
 const FORMAT: &str = "librixmail-backup";
+/// Même format, écrit par les versions précédentes (ancien nom technique) :
+/// sauvegardes et coffres restent lisibles.
+const OLD_FORMAT: &str = "vortexmail-backup";
 const VERSION: i64 = 1;
 /// Ralentit les essais de mots de passe ; enregistré dans le fichier. 600 000
 /// pour PBKDF2-HMAC-SHA256, comme le recommande l'OWASP (200 000 avant le
@@ -326,8 +329,8 @@ fn keys(password: &str, salt: &[u8], iterations: u32) -> ([u8; 32], [u8; 32]) {
     (enc, mac)
 }
 
-fn authenticate(mac_key: &[u8; 32], iterations: u32, salt: &[u8], nonce: &[u8], data: &[u8]) -> [u8; 32] {
-    let header = format!("{FORMAT}|{VERSION}|{iterations}|");
+fn authenticate(format: &str, mac_key: &[u8; 32], iterations: u32, salt: &[u8], nonce: &[u8], data: &[u8]) -> [u8; 32] {
+    let header = format!("{format}|{VERSION}|{iterations}|");
     Hmac::new(mac_key).mac(&[header.as_bytes(), salt, nonce, data])
 }
 
@@ -372,7 +375,7 @@ impl SealKey {
     /// Générateur aléatoire du système indisponible.
     pub(crate) fn seal(&self, plain: &[u8]) -> Result<String, String> {
         let nonce = crate::oauth::random_bytes::<12>()?;
-        Ok(sealed_file(self.iterations, &self.salt, &nonce, &self.enc, &self.mac, plain))
+        Ok(sealed_file(FORMAT, self.iterations, &self.salt, &nonce, &self.enc, &self.mac, plain))
     }
 }
 
@@ -383,15 +386,15 @@ pub(crate) fn seal_with(password: &str, plain: &[u8], iterations: u32) -> Result
     let salt = crate::oauth::random_bytes::<16>()?;
     let nonce = crate::oauth::random_bytes::<12>()?;
     let (enc, mac_key) = keys(password, &salt, iterations);
-    Ok(sealed_file(iterations, &salt, &nonce, &enc, &mac_key, plain))
+    Ok(sealed_file(FORMAT, iterations, &salt, &nonce, &enc, &mac_key, plain))
 }
 
 /// Contenu du fichier chiffré (JSON), clés déjà tirées.
-fn sealed_file(iterations: u32, salt: &[u8], nonce: &[u8; 12], enc: &[u8; 32], mac_key: &[u8; 32], plain: &[u8]) -> String {
+fn sealed_file(format: &str, iterations: u32, salt: &[u8], nonce: &[u8; 12], enc: &[u8; 32], mac_key: &[u8; 32], plain: &[u8]) -> String {
     let data = chacha20(enc, nonce, 1, plain);
-    let mac = authenticate(mac_key, iterations, salt, nonce, &data);
+    let mac = authenticate(format, mac_key, iterations, salt, nonce, &data);
     Json::obj([
-        ("format", FORMAT.into()),
+        ("format", format.into()),
         ("version", VERSION.into()),
         ("kdf", "pbkdf2-sha256".into()),
         ("iterations", i64::from(iterations).into()),
@@ -440,7 +443,7 @@ pub(crate) fn open(password: &str, file: &str) -> Result<Vec<u8>, String> {
 pub(crate) fn open_sealed(password: &str, file: &str) -> Result<Vec<u8>, OpenError> {
     let e = envelope(file)?;
     let (enc, mac_key) = keys(password, &e.salt, e.iterations);
-    if !same(&authenticate(&mac_key, e.iterations, &e.salt, &e.nonce, &e.data), &e.mac) {
+    if !same(&authenticate(e.format, &mac_key, e.iterations, &e.salt, &e.nonce, &e.data), &e.mac) {
         return Err(OpenError::WrongPassword);
     }
     Ok(chacha20(&enc, &e.nonce, 1, &e.data))
@@ -448,6 +451,8 @@ pub(crate) fn open_sealed(password: &str, file: &str) -> Result<Vec<u8>, OpenErr
 
 /// Enveloppe d'un fichier chiffré, lue sans aucun calcul de clé.
 pub(crate) struct Envelope {
+    /// Format lu ([`FORMAT`], ou [`OLD_FORMAT`] pour un fichier plus ancien).
+    format: &'static str,
     iterations: u32,
     salt: Vec<u8>,
     nonce: [u8; 12],
@@ -464,9 +469,7 @@ pub(crate) struct Envelope {
 pub(crate) fn envelope(file: &str) -> Result<Envelope, OpenError> {
     let not_backup = || OpenError::NotSealed;
     let v = json::parse(file.trim()).map_err(|_| not_backup())?;
-    if v.get("format").text() != FORMAT {
-        return Err(not_backup());
-    }
+    let format = [FORMAT, OLD_FORMAT].into_iter().find(|f| *f == v.get("format").text()).ok_or_else(not_backup)?;
     let version = v.get("version").as_i64().unwrap_or(0);
     if version != VERSION {
         return Err(OpenError::NewerVersion);
@@ -476,7 +479,7 @@ pub(crate) fn envelope(file: &str) -> Result<Envelope, OpenError> {
     let field = |name: &str| base64_decode(v.get(name).text()).map_err(|_| not_backup());
     let (salt, nonce, data, mac) = (field("salt")?, field("nonce")?, field("data")?, field("mac")?);
     let nonce: [u8; 12] = nonce.try_into().map_err(|_| not_backup())?;
-    Ok(Envelope { iterations, salt, nonce, data, mac })
+    Ok(Envelope { format, iterations, salt, nonce, data, mac })
 }
 
 #[cfg(test)]
@@ -489,6 +492,16 @@ mod tests {
             let _ = write!(s, "{b:02x}");
             s
         })
+    }
+
+    #[test]
+    fn fichiers_des_versions_precedentes_lisibles() {
+        let (salt, nonce) = ([7u8; 16], [9u8; 12]);
+        let (enc, mac) = keys("mot de passe maître", &salt, 1000);
+        let old = sealed_file(OLD_FORMAT, 1000, &salt, &nonce, &enc, &mac, b"ancien");
+        assert_eq!(open("mot de passe maître", &old).unwrap(), b"ancien", "ancien format toujours ouvert");
+        let renamed = old.replace(OLD_FORMAT, FORMAT);
+        assert!(open("mot de passe maître", &renamed).is_err(), "le format fait partie du contrôle d'intégrité");
     }
 
     #[test]

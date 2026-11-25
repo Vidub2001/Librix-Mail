@@ -6,8 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-use mail_parser::MessageParser;
 use librixmail_lib::attachments;
+use mail_parser::MessageParser;
 
 fn corpus() -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/corpus/attaques");

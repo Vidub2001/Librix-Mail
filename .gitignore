@@ -23,3 +23,6 @@ smime-test/
 # Tests de l'interface (Playwright, lot E4) : résultats et traces des échecs
 test-results/
 playwright-report/
+
+# Fichiers compilés de Python
+__pycache__/

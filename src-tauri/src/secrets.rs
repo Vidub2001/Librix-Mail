@@ -2,7 +2,7 @@
 //! `KWallet`). Le fichier `accounts.json` n'en contient plus aucun.
 //!
 //! Entrées : service `librixmail`, identifiant `<compte>/imap` ou `<compte>/smtp`.
-//! Les entrées des versions précédentes (service `librixmail`) sont reprises
+//! Les entrées des versions précédentes (ancien nom de service) sont reprises
 //! à la première lecture, puis retirées.
 //! Elles sont visibles dans « Mots de passe et clés » (Seahorse), sous un
 //! libellé lisible : « Librix Mail — adresse (mot de passe IMAP) ».
@@ -12,8 +12,8 @@ use std::path::Path;
 use crate::config::{self, AccountConfig};
 
 const SERVICE: &str = "librixmail";
-/// Service des versions précédentes (nom de projet « `LibrixMail` »).
-const OLD_SERVICE: &str = "librixmail";
+/// Service des versions précédentes (ancien nom technique de l'application).
+const OLD_SERVICE: &str = "vortexmail";
 
 /// Entrée du trousseau créée avec un libellé lisible (affiché par Seahorse).
 /// Mêmes attributs qu'une entrée ordinaire : lecture et suppression inchangées.
@@ -43,8 +43,10 @@ const PIECE: usize = 1000;
 const PIECE: usize = usize::MAX;
 
 /// Valeur de l'entrée principale d'un secret découpé : « librix-pieces:<génération>:<n> ».
-/// Les versions précédentes écrivaient « librix-pieces:<n> », sans génération.
+/// Les toutes premières versions écrivaient « <marque><n> », sans génération.
 const PIECES: &str = "librix-pieces:";
+/// Même marque, écrite par les versions précédentes (ancien nom technique).
+const OLD_PIECES: &str = "vortex-pieces:";
 
 /// Clé d'un morceau : `clé#<génération>.<i>`, ou `clé#<i>` pour l'ancien format (génération 0).
 fn piece_key(key: &str, generation: u64, i: usize) -> String {
@@ -57,7 +59,7 @@ fn piece_key(key: &str, generation: u64, i: usize) -> String {
 
 /// Génération et nombre de morceaux annoncés par l'entrée principale.
 fn pieces_of(value: &str) -> Option<(u64, usize)> {
-    let rest = value.strip_prefix(PIECES)?.trim();
+    let rest = value.strip_prefix(PIECES).or_else(|| value.strip_prefix(OLD_PIECES))?.trim();
     match rest.split_once(':') {
         Some((generation, n)) => Some((generation.parse().ok()?, n.parse().ok()?)),
         None => Some((0, rest.parse().ok()?)),
@@ -845,9 +847,9 @@ mod tests {
 
     #[test]
     fn secrets_of_the_previous_format_are_read_and_replaced() {
-        // Format des versions précédentes : « librix-pieces:2 », morceaux `clé#1`, `clé#2`.
+        // Format des versions précédentes : ancienne marque, « …-pieces:2 », morceaux `clé#1`, `clé#2`.
         let m = Memory::default();
-        m.set("k", "librix-pieces:2").unwrap();
+        m.set("k", &format!("{OLD_PIECES}2")).unwrap();
         m.set("k#1", "abcd").unwrap();
         m.set("k#2", "ef").unwrap();
         assert_eq!(read_in(&m, "k").unwrap().as_deref(), Some("abcdef"));
@@ -865,7 +867,7 @@ mod tests {
     #[test]
     fn damaged_vault_falls_back_to_its_copy() {
         // Relecture C3 : clé USB retirée pendant l'écriture du coffre.
-        let dir = std::env::temp_dir().join(format!("vx-vault-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lx-vault-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("secrets.vault");
         let password = "mot de passe maître";

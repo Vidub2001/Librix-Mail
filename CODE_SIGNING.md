@@ -11,7 +11,7 @@ Only the Windows files of a published Librix Mail release are signed:
 
 They are built from this repository by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)) when a version tag (`v*`) is pushed. Files built anywhere else, including on a developer's computer, are never submitted for signing. Every signing request is approved by hand before it is signed.
 
-Every release also lists the SHA-256 checksums of all its files (`SHA256SUMS`), Linux packages included.
+Every release also lists the SHA-256 checksums of all its files (`SHA256SUMS`), Linux packages included, signed by the "Librix Mail (versions)" GPG key (`docs/cle-versions.asc`, fingerprint `3AA4 3687 38D2 5560 D38F  FA8C AECA 22C8 CA23 A542`).
 
 ## Team roles
 

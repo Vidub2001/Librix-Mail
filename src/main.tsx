@@ -10,13 +10,14 @@ import { loadSecureStore } from "./secure-store";
 // Fenêtre principale, ou fenêtre secondaire (message, rédaction) selon l'adresse.
 const params = new URLSearchParams(window.location.search);
 
-// Réglages des versions précédentes (« librixmail.* ») : repris sous « librix.* ».
+// Réglages des versions précédentes (ancien nom technique) : repris sous « librix.* ».
+const OLD_PREFIX = "vortex.";
 try {
   for (const key of Object.keys(localStorage)) {
-    if (!key.startsWith("librixmail.")) continue;
+    if (!key.startsWith(OLD_PREFIX)) continue;
     const value = localStorage.getItem(key);
-    const renamed = `librix.${key.slice("librixmail.".length)}`;
-    if (value !== null && key !== "librixmail.microsoftClientId" && localStorage.getItem(renamed) === null) {
+    const renamed = `librix.${key.slice(OLD_PREFIX.length)}`;
+    if (value !== null && localStorage.getItem(renamed) === null) {
       localStorage.setItem(renamed, value);
     }
     localStorage.removeItem(key);
