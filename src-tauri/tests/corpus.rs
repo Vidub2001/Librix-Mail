@@ -205,21 +205,18 @@ fn images_vers_le_reseau_local_refusees() {
     assert!(librixmail_lib::corpus_api::check_image_url("https://93.184.216.34/logo.png").is_ok());
 }
 
-/// Lot 5 (S5) : un expéditeur ou un objet piégé ne passe ni en option de
-/// notify-send, ni en balisage.
+/// Lot 5 (S5) : un objet piégé ne passe pas en balisage dans le texte de la
+/// notification (envoyée par D-Bus depuis le lot PK1 : plus d'option de
+/// ligne de commande à craindre).
 #[test]
 fn notifications_piegees_neutralisees() {
     for file in ["S5-a-notify-option.eml", "S5-b-notify-balisage.eml"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/corpus/attaques").join(file);
         let raw = std::fs::read(&path).expect("lecture du mail");
         let message = MessageParser::default().parse(&raw[..]).expect("mail lisible");
-        let from = message.from().and_then(|f| f.first()).and_then(|a| a.name()).unwrap_or_default().to_string();
         let subject = message.subject().unwrap_or_default().to_string();
-        let args = librixmail_lib::corpus_api::notify_send_args(&from, &format!("{subject}\nCompte"));
-        let sep = args.iter().position(|a| a == "--").unwrap_or_else(|| panic!("{file} : pas de --"));
-        assert_eq!(args[sep + 1], from, "{file}");
-        assert!(!args[sep + 2].contains('<'), "{file} : balisage dans le texte : {}", args[sep + 2]);
-        assert!(args[..sep].iter().all(|a| !a.contains(&from) || from.is_empty()), "{file}");
+        let body = librixmail_lib::corpus_api::notification_body(&format!("{subject}\nCompte"));
+        assert!(!body.contains('<'), "{file} : balisage dans le texte : {body}");
     }
 }
 

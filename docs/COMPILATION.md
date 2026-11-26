@@ -57,7 +57,7 @@ sudo apt update
 sudo apt install -y build-essential curl wget file pkg-config git \
   libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
   libayatana-appindicator3-dev librsvg2-dev \
-  libdbus-1-dev libnotify-bin
+  libdbus-1-dev
 ```
 
 | Paquet | Pourquoi |
@@ -66,7 +66,6 @@ sudo apt install -y build-essential curl wget file pkg-config git \
 | `libwebkit2gtk-4.1-dev` | Moteur web de l'interface |
 | `libssl-dev` | TLS (connexions IMAP, SMTP, HTTPS) et chiffrement du cache (SQLCipher, lot G4) |
 | `libdbus-1-dev` | Trousseau du système (Secret Service : GNOME Keyring, KWallet) |
-| `libnotify-bin` | Notifications des nouveaux messages (`notify-send`) |
 | `libxdo-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev` | Dépendances de Tauri (`libayatana-appindicator3` : icône de la zone de notification, lot B3) |
 
 **Rust** (via rustup ; la version du projet, fixée par `rust-toolchain.toml`, s'installe d'elle-même au premier `cargo`) :
@@ -149,6 +148,19 @@ version de développement (même identifiant), rien n'est à réimporter.
 
 Autres formats possibles : `--bundles appimage` (fichier unique exécutable), `--bundles rpm`.
 Sans l'option `--bundles`, ce sont les formats listés dans `tauri.conf.json` (`deb` et `appimage`).
+
+### 2.5 Flatpak et Snap
+
+Ces deux paquets se construisent avec leurs propres outils, depuis la racine du dépôt :
+
+```bash
+make flatpak                  # target/Librix.Mail_x86_64.flatpak, installé pour l'utilisateur
+sg lxd -c "make snap"         # target/librixmail_<version>_amd64.snap (snapcraft dans LXD)
+```
+
+Outils à installer, permissions, essais et publication : [packaging/flatpak/README.md](../packaging/flatpak/README.md)
+et [packaging/snap/README.md](../packaging/snap/README.md). À chaque étiquette `v*`, GitHub Actions
+construit aussi le `.flatpak` (joint à la version) et le snap (canal edge du Snap Store).
 
 ---
 
@@ -358,6 +370,10 @@ Pour libérer la place prise par la compilation (2 à 4 Go) : `cargo clean` à l
 | Cache du courrier, agenda, contacts (`cache.sqlite`) | `~/.local/share/fr.librixmail.app/` | `%APPDATA%\fr.librixmail.app\` |
 | Mots de passe et jetons OAuth | Trousseau (GNOME Keyring, « Mots de passe et clés »), service `librixmail` | Gestionnaire d'identification Windows, entrées `…librixmail` |
 
+Le Flatpak et le Snap gardent leurs données à part : `~/.var/app/fr.librixmail.Client/` (Flatpak) et
+`~/snap/librixmail/current/` (Snap), chacun avec un sous-dossier `fr.librixmail.app`. Le trousseau
+reste celui de la session.
+
 Les jetons trop longs pour le Gestionnaire d'identification de Windows sont répartis sur plusieurs
 entrées (`clé#1`, `clé#2`…) et réassemblés automatiquement.
 
@@ -408,7 +424,6 @@ La version affichée et celle des installateurs viennent de `"version"` dans
 | `Failed when opening source(s)` / `0x8a15000f` (winget) | Catalogue winget absent ou réseau sans DNS | Vérifier le DNS (`Resolve-DnsName github.com`), puis `winget source reset --force` et `winget source update` |
 | `failed to build bundler settings: invalid category` | Catégorie inconnue dans `tauri.conf.json` | Utiliser une valeur reconnue (`Productivity`) |
 | Mots de passe perdus à chaque fermeture | Trousseau non disponible | Linux : vérifier que GNOME Keyring tourne ; Windows : vérifier que la version compilée inclut `windows-native` (`src-tauri/Cargo.toml`) |
-| Pas de notification (Linux) | `notify-send` absent | `sudo apt install libnotify-bin` |
 | `error: linker 'link.exe' not found` (Windows) | Build Tools absents ou incomplets | Réinstaller les Build Tools avec le composant `VC.Tools.x86.x64` |
 
 ---

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Librix Mail
+GenericName=Mail Client
+GenericName[fr]=Client mail
+GenericName[es]=Cliente de correo
+Comment=All your mail accounts in one inbox, with calendar and contacts
+Comment[fr]=Tous vos comptes mail dans une seule boîte, avec agenda et contacts
+Comment[es]=Todas tus cuentas de correo en una sola bandeja, con calendario y contactos
+Exec=librixmail
+Icon=fr.librixmail.Client
+Terminal=false
+Categories=Office;Email;Calendar;ContactManagement;
+Keywords=mail;email;e-mail;IMAP;calendar;contacts;Gmail;Outlook;
+Keywords[fr]=mail;courriel;messagerie;IMAP;agenda;contacts;Gmail;Outlook;
+Keywords[es]=correo;email;IMAP;calendario;contactos;Gmail;Outlook;
+StartupNotify=true
+StartupWMClass=librixmail

@@ -31,6 +31,7 @@ mod mimeparse;
 mod o365;
 mod oauth;
 mod outbox;
+mod packaging;
 mod pim;
 mod pimfmt;
 mod portable;
@@ -67,10 +68,10 @@ pub mod corpus_api {
         crate::http::check_image_url(url)
     }
 
-    /// Arguments passés à `notify-send` pour une notification.
+    /// Texte d'une notification tel qu'envoyé au serveur de notifications.
     #[must_use]
-    pub fn notify_send_args(summary: &str, body: &str) -> Vec<String> {
-        crate::idle::notify_send_args(summary, body, "mail-unread", "email.arrived", &[])
+    pub fn notification_body(body: &str) -> String {
+        crate::idle::notification_body(body)
     }
 
     /// Noms des pièces jointes d'un message, tels que l'interface les affiche.
@@ -357,9 +358,15 @@ pub fn run() {
     }
     // Une seule instance : relancer Librix Mail (par exemple fenêtre cachée
     // dans la zone de notification) montre la fenêtre existante, au lieu
-    // d'ouvrir une seconde application sur le même cache (lot B3).
-    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)));
-    // Notifications du bureau hors Linux (sous Linux : notify-send, voir idle.rs).
+    // d'ouvrir une seconde application sur le même cache (lot B3). Dans le
+    // Flatpak, nom D-Bus pris sous l'identifiant du paquet (lot PK2).
+    let single_instance = tauri_plugin_single_instance::Builder::new().callback(|app, _args, _cwd| tray::show_main(app));
+    let single_instance = match packaging::Packaging::current().dbus_id() {
+        Some(id) => single_instance.dbus_id(id),
+        None => single_instance,
+    };
+    let builder = tauri::Builder::default().plugin(single_instance.build());
+    // Notifications du bureau hors Linux (sous Linux : D-Bus, voir idle.rs).
     #[cfg(not(target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_notification::init());
     builder
@@ -422,8 +429,10 @@ pub fn run() {
             };
             attachments::clean_temp(&files_dir);
             diag::step("fichiers temporaires nettoyés");
-            let downloads_dir =
-                app.path().download_dir().unwrap_or_else(|_| std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from));
+            // Snap : son dossier personnel n'est pas celui de l'utilisateur (lot PK1).
+            let downloads_dir = packaging::Packaging::current().downloads_dir().unwrap_or_else(|| {
+                app.path().download_dir().unwrap_or_else(|_| std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from))
+            });
             // Déplacements interrompus lors de la session précédente : repris au
             // premier passage de `flush_pending` (dès que le réseau répond).
             let journal = journal::load(Arc::clone(&cache));
@@ -537,6 +546,7 @@ pub fn run() {
             commands::o365_sign_out,
             commands::open_url,
             commands::check_update,
+            commands::update_channel,
             commands::save_draft,
             commands::discard_draft,
             commands::open_draft,

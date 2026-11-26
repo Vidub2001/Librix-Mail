@@ -1,0 +1,105 @@
+# Flatpak de Librix Mail (lot PK2). Mode d'emploi : packaging/flatpak/README.md.
+#
+# Construit depuis les sources, sans réseau pendant la compilation (règle de
+# Flathub) : les crates et les paquets npm sont déclarés comme sources dans
+# generated/cargo-sources.json et generated/node-sources.json (`make flatpak-sources`).
+#
+# Identifiant Flatpak fr.librixmail.Client ; l'identifiant Tauri reste
+# fr.librixmail.app (dossier des données dans le bac à sable :
+# ~/.var/app/fr.librixmail.Client/data/fr.librixmail.app).
+id: fr.librixmail.Client
+runtime: org.gnome.Platform
+# WebKitGTK 4.1 (2.54), libsoup 3, OpenSSL 3.5 ; prévu jusqu'à GNOME 53.
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.node22
+command: librixmail
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Pièces jointes et sauvegardes enregistrées dans Téléchargements (lot PK1).
+  # Les fichiers ouverts passent par le portail OpenURI, sans autre accès.
+  - --filesystem=xdg-download
+  # Notifications du bureau (idle.rs, lot PK1).
+  - --talk-name=org.freedesktop.Notifications
+  # Mots de passe et clés dans le trousseau (Secret Service).
+  - --talk-name=org.freedesktop.secrets
+  # Zone de notification (StatusNotifierItem par ksni). tray-icon 0.25 réserve
+  # le nom org.kde.StatusNotifierItem-<pid>-<n>, et le pid vaut 2 dans le bac à
+  # sable : à retirer quand tray-icon s'en passera (disable_dbus_name).
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --own-name=org.kde.StatusNotifierItem-2-1
+
+modules:
+  # Rust 1.100 (version minimale du projet) : l'extension rust-stable de
+  # Flathub n'en est qu'à 1.98. Archive officielle téléchargée avant la
+  # construction ; ne sert qu'à compiler (retirée du paquet). À remplacer par
+  # org.freedesktop.Sdk.Extension.rust-stable dès qu'elle atteint 1.100.
+  - name: rust
+    buildsystem: simple
+    # Bibliothèques livrées telles quelles : flatpak-builder, en séparant les
+    # symboles de débogage, rendait libLLVM illisible pour rustc.
+    build-options:
+      no-debuginfo: true
+      strip: false
+    cleanup:
+      - '*'
+    sources:
+      - type: archive
+        url: https://static.rust-lang.org/dist/rust-1.100.0-x86_64-unknown-linux-gnu.tar.xz
+        sha256: 98ee6bec240e1cfe944f17e7092412dc5ef6e008484bb668c6936d35a7d15acd
+        only-arches:
+          - x86_64
+    build-commands:
+      - ./install.sh --prefix=/app/rust --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu
+        --disable-ldconfig
+
+  - name: librixmail
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/node22/bin:/app/rust/bin
+      env:
+        CARGO_HOME: /run/build/librixmail/cargo
+        CARGO_NET_OFFLINE: 'true'
+        npm_config_cache: /run/build/librixmail/flatpak-node/npm-cache
+        npm_config_offline: 'true'
+        npm_config_audit: 'false'
+        npm_config_fund: 'false'
+        XDG_CACHE_HOME: /run/build/librixmail/flatpak-node/cache
+    sources:
+      # Le dépôt tel qu'il est sur le disque (fichier .flatpak de GitHub).
+      # Pour Flathub (lot PK6) : type git, url du dépôt et étiquette de la version.
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - node_modules
+          - dist
+          - fuzz/target
+          - test-results
+          - smime-test
+          - packaging/flatpak/generated
+          - .flatpak-builder
+          - .git
+      - generated/cargo-sources.json
+      - generated/node-sources.json
+    build-commands:
+      - npm ci --offline --ignore-scripts
+      # Ce que fait `tauri build`, sans sa CLI (qui s'arrête sur une panique
+      # dans le bac à sable de flatpak-builder) : interface (beforeBuildCommand),
+      # puis Rust en mode release avec l'option custom-protocol de Tauri, qui
+      # sert l'interface embarquée au lieu du serveur de développement.
+      - npm run build
+      - cargo build --release --offline --locked -p librixmail --features tauri/custom-protocol
+      - install -Dm755 target/release/librixmail /app/bin/librixmail
+      - install -Dm644 packaging/flatpak/fr.librixmail.Client.desktop /app/share/applications/fr.librixmail.Client.desktop
+      - install -Dm644 packaging/flatpak/fr.librixmail.Client.metainfo.xml /app/share/metainfo/fr.librixmail.Client.metainfo.xml
+      - install -Dm644 src-tauri/icons/32x32.png /app/share/icons/hicolor/32x32/apps/fr.librixmail.Client.png
+      - install -Dm644 src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/fr.librixmail.Client.png
+      - install -Dm644 src-tauri/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/fr.librixmail.Client.png
+      - install -Dm644 src-tauri/icons/icon.png /app/share/icons/hicolor/512x512/apps/fr.librixmail.Client.png

@@ -49,12 +49,20 @@ Les versions sont construites à partir de ce dépôt par GitHub Actions. Chacun
 |---|---|
 | Ubuntu, Debian | paquet `.deb` |
 | Toute distribution Linux | `AppImage` |
+| Toute distribution Linux, en bac à sable | `.flatpak` (bientôt sur Flathub) |
+| Ubuntu et distributions avec snapd | Snap Store : `sudo snap install librixmail` |
 | Windows 10 et 11 | installateur `.exe` |
 | Windows, sans installation | version portable `.zip` |
 
 Les fichiers Windows ne sont pas encore signés : Windows peut afficher un avertissement à la première installation.
 
-> **État :** version 0.4.0, utilisée tous les jours par son auteur. Les retours et signalements sont les bienvenus.
+Flatpak : `flatpak install --user ./Librix.Mail_x86_64.flatpak`. Snap : connecter ensuite le trousseau et l'instance unique,
+`sudo snap connect librixmail:password-manager-service` et
+`sudo snap connect librixmail:single-instance-plug librixmail:single-instance`.
+Les données du Flatpak et du Snap sont séparées de celles du `.deb` : pour passer de l'un à l'autre,
+exportez une sauvegarde (Paramètres › Sauvegarde) puis importez-la dans la nouvelle installation.
+
+> **État :** version 0.4.2, utilisée tous les jours par son auteur. Les retours et signalements sont les bienvenus.
 
 ## Fonctionnalités
 
@@ -207,6 +215,8 @@ réglages du compte ; ils sont rangés dans le trousseau et ne sont plus jamais 
 | Cache du courrier, de l'agenda et des contacts (`cache.sqlite`) | `~/.local/share/fr.librixmail.app/` | `%APPDATA%\fr.librixmail.app\` |
 | Mots de passe et jetons | trousseau, service `librixmail` | coffre d'identifiants de Windows |
 | Mode portable | — | dossier `data\` à côté de l'exécutable |
+| Flatpak | `~/.var/app/fr.librixmail.Client/` (`config/` et `data/`, sous-dossier `fr.librixmail.app`) | — |
+| Snap | `~/snap/librixmail/current/` (`.config/` et `.local/share/`, sous-dossier `fr.librixmail.app`) | — |
 
 Le cache peut être supprimé sans risque : il est reconstruit depuis les serveurs. Les
 installations faites par les versions précédentes sont reprises automatiquement au premier

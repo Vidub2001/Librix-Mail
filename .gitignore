@@ -26,3 +26,10 @@ playwright-report/
 
 # Fichiers compilés de Python
 __pycache__/
+
+# Flatpak (lot PK2) : sources générées par make flatpak-sources, état de flatpak-builder
+packaging/flatpak/generated/
+.flatpak-builder/
+
+# Snap (lot PK3) : paquets construits hors de target/
+*.snap

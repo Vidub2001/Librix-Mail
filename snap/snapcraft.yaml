@@ -1,0 +1,104 @@
+# Snap de Librix Mail (lot PK3). Mode d'emploi : packaging/snap/README.md.
+#
+# Nom du snap et de l'application : librixmail (SNAP_APP dans
+# src-tauri/src/packaging.rs : snapd nomme le lanceur librixmail_librixmail.desktop).
+# Socle core26 (Ubuntu 26.04) avec l'extension gnome : WebKitGTK 4.1 vient du
+# snap gnome-core26, partagé entre les applications.
+name: librixmail
+title: Librix Mail
+base: core26
+adopt-info: librixmail
+license: GPL-3.0-or-later
+# Icône de la fiche du Snap Store.
+icon: src-tauri/icons/icon.png
+grade: stable
+confinement: strict
+contact: https://librixmail.fr/contact.html
+website: https://librixmail.fr
+issues: https://github.com/Vidub2001/Librix-Mail/issues
+source-code: https://github.com/Vidub2001/Librix-Mail
+
+platforms:
+  amd64:
+
+# Instance unique (tauri-plugin-single-instance) : nom D-Bus tiré de
+# l'identifiant Tauri, réservé par l'application et appelé par une seconde
+# instance.
+slots:
+  single-instance:
+    interface: dbus
+    bus: session
+    name: fr.librixmail.app.SingleInstance
+plugs:
+  single-instance-plug:
+    interface: dbus
+    bus: session
+    name: fr.librixmail.app.SingleInstance
+
+apps:
+  librixmail:
+    command: usr/bin/librixmail
+    desktop: usr/share/applications/fr.librixmail.Client.desktop
+    common-id: fr.librixmail.Client
+    extensions: [gnome]
+    plugs:
+      # Serveurs de courrier, d'agenda et de contacts ; retour de la connexion
+      # OAuth (Gmail, Outlook.com) sur un port local.
+      - network
+      - network-bind
+      # État du réseau (portail NetworkMonitor) : sans lui, WebKitGTK croit
+      # la machine hors ligne (navigator.onLine) et l'interface aussi.
+      - network-status
+      # Pièces jointes et sauvegardes enregistrées dans Téléchargements.
+      - home
+      # Mots de passe et jetons dans le trousseau. Pas connecté d'office :
+      # `snap connect librixmail:password-manager-service` (message de
+      # secrets.rs, lot PK1).
+      - password-manager-service
+      # Réglages GTK (core26 : à déclarer soi-même).
+      - gsettings
+      # Zone de notification : nom org.kde.StatusNotifierItem-<pid>-<n>.
+      - unity7
+      - single-instance-plug
+    slots:
+      - single-instance
+
+parts:
+  librixmail:
+    plugin: nil
+    # Le dépôt git (commits seulement) : ni target/ ni node_modules/, qui
+    # pèsent plusieurs Go. Commiter avant `make snap`.
+    source: .
+    source-type: git
+    build-snaps:
+      - node/22/stable
+      - rustup
+    build-packages:
+      - build-essential
+      - pkg-config
+      - libssl-dev
+    stage-packages:
+      - libssl3t64
+    # Version, résumé et description tirés de tauri.conf.json et de la fiche AppStream.
+    parse-info: [usr/share/metainfo/fr.librixmail.Client.metainfo.xml]
+    override-pull: |
+      craftctl default
+      craftctl set version="$(python3 -c 'import json; print(json.load(open("src-tauri/tauri.conf.json"))["version"])')"
+    # Ce que fait `tauri build` : interface, puis Rust en mode release avec
+    # l'option custom-protocol (interface embarquée). Rust : la version de
+    # rust-toolchain.toml (1.100), installée par rustup.
+    override-build: |
+      set -eux
+      rustup toolchain install
+      npm ci --no-audit --no-fund
+      npm run build
+      cargo build --release --locked -p librixmail --features tauri/custom-protocol
+      install -Dm755 target/release/librixmail "$CRAFT_PART_INSTALL/usr/bin/librixmail"
+      install -Dm644 packaging/flatpak/fr.librixmail.Client.metainfo.xml \
+        "$CRAFT_PART_INSTALL/usr/share/metainfo/fr.librixmail.Client.metainfo.xml"
+      install -Dm644 src-tauri/icons/icon.png \
+        "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/fr.librixmail.Client.png"
+      # Même lanceur que le Flatpak, icône désignée par son chemin dans le snap.
+      sed 's|^Icon=.*|Icon=${SNAP}/usr/share/icons/hicolor/512x512/apps/fr.librixmail.Client.png|' \
+        packaging/flatpak/fr.librixmail.Client.desktop > desktop.tmp
+      install -Dm644 desktop.tmp "$CRAFT_PART_INSTALL/usr/share/applications/fr.librixmail.Client.desktop"

@@ -69,7 +69,7 @@ A `nosemgrep` without a rule name (it would silence every rule) or without a rea
 | `librix-shell-command` | `Command::new("cmd")` and other command interpreters, including by path (`/bin/sh`, `zsh`, `mshta`…) | S1 | 2, 8e |
 | `librix-extension-denylist` | extension denylists (`".exe"`…) | S1 | 2 |
 | `librix-auth-redirect` | `Authorization` headers sent again after a redirect | A1 | 5 |
-| `librix-notify-send-args` | sender and subject passed to `notify-send` | S5 | 5 |
+| `librix-notify-send-args` | return to `notify-send` (notifications over D-Bus since batch PK1) | S5 | 5 |
 | `librix-raw-html-sink` | `innerHTML =` and equivalents (`srcDoc`, `createContextualFragment`, `insertHTML`…), outside the allowed module `src/safe-html.ts`; three justified exceptions | S2, S3, S4 | 4, 8e |
 | `librix-html-reparse` | sanitised HTML put back into a `DOMParser` and parsed again | S3 | 4 |
 

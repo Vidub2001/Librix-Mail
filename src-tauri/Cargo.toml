@@ -1,6 +1,6 @@
 [package]
 name = "librixmail"
-version = "0.4.1"
+version = "0.4.2"
 description = "Client mail multi-comptes IMAP, avec agenda et contacts"
 edition = "2021"
 # Version minimale de Rust : celle qu'exige mail-parser 1.0.
@@ -66,6 +66,10 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 # libayatana-appindicator, déclarée obsolète (lot S3) : même version que celle
 # de Tauri, dont l'option `ksni` est alors retenue (tray-icon 0.25 et plus).
 tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
+# Notifications (org.freedesktop.Notifications) et ouverture des fichiers par
+# le portail du bureau dans Flatpak et Snap (lot PK1) : même version que celle
+# de ksni, déjà dans l'application.
+zbus = "5"
 
 [target.'cfg(windows)'.dependencies]
 rusqlite = { version = "0.41", features = ["bundled-sqlcipher-vendored-openssl"] }
@@ -87,7 +91,7 @@ rusqlite = { version = "0.41", features = ["bundled-sqlcipher"] }
 keyring = { version = "3", features = ["apple-native"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-# Notifications du bureau (sous Linux : notify-send).
+# Notifications du bureau (sous Linux : D-Bus, voir idle.rs).
 tauri-plugin-notification = "2"
 
 [dev-dependencies]

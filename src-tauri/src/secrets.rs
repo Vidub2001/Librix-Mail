@@ -21,14 +21,14 @@ fn labeled_entry(service: &str, user: &str, label: &str) -> Result<keyring::Entr
     #[cfg(target_os = "linux")]
     {
         let mut credential = keyring::secret_service::SsCredential::new_with_target(None, service, user)
-            .map_err(|e| tr!("trousseau inaccessible : {e}", e = e))?;
+            .map_err(|e| keyring_error(tr!("trousseau inaccessible : {e}", e = e)))?;
         credential.label = label.to_string();
         Ok(keyring::Entry::new_with_credential(Box::new(credential)))
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = label;
-        keyring::Entry::new(service, user).map_err(|e| tr!("trousseau inaccessible : {e}", e = e))
+        keyring::Entry::new(service, user).map_err(|e| keyring_error(tr!("trousseau inaccessible : {e}", e = e)))
     }
 }
 
@@ -89,25 +89,36 @@ struct Keyring<'a> {
     label: &'a str,
 }
 
+/// Erreur du trousseau, avec la marche à suivre dans le Snap : l'accès au
+/// Secret Service (interface `password-manager-service`) n'y est pas
+/// accordé d'office (lot PK1).
+fn keyring_error(message: String) -> String {
+    if crate::packaging::Packaging::current() == crate::packaging::Packaging::Snap {
+        tr!("{e} (Snap : autorisez l'accès au trousseau avec « snap connect librixmail:password-manager-service »)", e = message)
+    } else {
+        message
+    }
+}
+
 impl Store for Keyring<'_> {
     fn get(&self, key: &str) -> Result<Option<String>, String> {
         match labeled_entry(self.service, key, self.label)?.get_password() {
             Ok(v) => Ok(Some(v)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(tr!("lecture du trousseau impossible : {e}", e = e)),
+            Err(e) => Err(keyring_error(tr!("lecture du trousseau impossible : {e}", e = e))),
         }
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
         labeled_entry(self.service, key, self.label)?
             .set_password(value)
-            .map_err(|e| tr!("enregistrement dans le trousseau impossible : {e}", e = e))
+            .map_err(|e| keyring_error(tr!("enregistrement dans le trousseau impossible : {e}", e = e)))
     }
 
     fn del(&self, key: &str) -> Result<(), String> {
         match labeled_entry(self.service, key, self.label)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(tr!("suppression dans le trousseau impossible : {e}", e = e)),
+            Err(e) => Err(keyring_error(tr!("suppression dans le trousseau impossible : {e}", e = e))),
         }
     }
 }
@@ -517,11 +528,11 @@ pub(crate) fn relabel(user: &str, new_label: &str) -> Result<(), String> {
     if crate::portable::is_portable() {
         return Ok(()); // coffre portable : pas de libellés
     }
-    let plain = keyring::Entry::new(SERVICE, user).map_err(|e| tr!("trousseau inaccessible : {e}", e = e))?;
+    let plain = keyring::Entry::new(SERVICE, user).map_err(|e| keyring_error(tr!("trousseau inaccessible : {e}", e = e)))?;
     let secret = match plain.get_password() {
         Ok(secret) => secret,
         Err(keyring::Error::NoEntry) => return Ok(()),
-        Err(e) => return Err(tr!("lecture du trousseau impossible : {e}", e = e)),
+        Err(e) => return Err(keyring_error(tr!("lecture du trousseau impossible : {e}", e = e))),
     };
     plain.delete_credential().map_err(|e| tr!("trousseau : {e}", e = e))?;
     if let Err(e) = labeled_entry(SERVICE, user, new_label)?.set_password(&secret) {

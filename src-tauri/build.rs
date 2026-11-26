@@ -85,6 +85,7 @@ const COMMANDS: &[&str] = &[
     "o365_sign_out",
     "open_url",
     "check_update",
+    "update_channel",
     "save_draft",
     "discard_draft",
     "open_draft",

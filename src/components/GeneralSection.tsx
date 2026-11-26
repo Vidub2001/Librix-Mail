@@ -1,6 +1,7 @@
 // Paramètres › Général : apparence, disposition, dates et heures, rédaction, contacts.
 import { Field, Radio, RadioGroup, Select, Switch } from "@fluentui/react-components";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { api } from "../api";
 import {
   DATE_CHOICES,
   TIME_CHOICES,
@@ -12,6 +13,7 @@ import {
   type TimeFormat,
 } from "../general";
 import type { ThemeMode } from "../theme";
+import type { UpdateChannel } from "../types";
 import { LANGUAGES, t, type Lang } from "../i18n";
 
 interface Props {
@@ -66,6 +68,18 @@ const LAYOUTS: { value: Layout; label: string }[] = [
 
 export function GeneralSection({ themeMode, onThemeMode }: Props) {
   const g = useGeneral();
+  // Mises à jour par Flatpak ou Snap : rien à régler ici (lot PK1).
+  const [channel, setChannel] = useState<UpdateChannel>("github");
+  useEffect(() => {
+    let alive = true;
+    api
+      .updateChannel()
+      .then((c) => alive && setChannel(c))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   return (
     <div className="settings-pane compact">
       <h3 className="settings-pane-title section-title">{t("Général")}</h3>
@@ -195,14 +209,22 @@ export function GeneralSection({ themeMode, onThemeMode }: Props) {
 
       <fieldset className="account-fieldset">
         <legend>{t("Mises à jour")}</legend>
-        <Switch
-          checked={g.checkUpdates}
-          onChange={(_, d) => saveGeneral({ checkUpdates: d.checked })}
-          label={t("Signaler les nouvelles versions")}
-        />
-        <p className="muted settings-hint">
-          {t("Une fois par jour, Librix Mail demande à GitHub le numéro de la dernière version ; GitHub voit alors votre adresse IP. Rien n'est téléchargé ni installé sans vous.")}
-        </p>
+        {channel === "github" ? (
+          <>
+            <Switch
+              checked={g.checkUpdates}
+              onChange={(_, d) => saveGeneral({ checkUpdates: d.checked })}
+              label={t("Signaler les nouvelles versions")}
+            />
+            <p className="muted settings-hint">
+              {t("Une fois par jour, Librix Mail demande à GitHub le numéro de la dernière version ; GitHub voit alors votre adresse IP. Rien n'est téléchargé ni installé sans vous.")}
+            </p>
+          </>
+        ) : (
+          <p className="muted settings-hint">
+            {t("Les mises à jour sont installées par le gestionnaire de logiciels du système, sans que Librix Mail interroge GitHub.")}
+          </p>
+        )}
       </fieldset>
     </div>
   );

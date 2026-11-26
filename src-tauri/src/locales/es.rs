@@ -175,6 +175,7 @@ pub(super) static ES: &[(&str, &str)] = &[
     ("enregistrement dans le trousseau impossible : {e}", "no se puede guardar en el llavero: {e}"),
     ("enregistrement de {file} impossible : {e}", "no se puede guardar {file}: {e}"),
     ("imbrication trop profonde", "anidamiento demasiado profundo"),
+    ("{e} (Snap : autorisez l'accès au trousseau avec « snap connect librixmail:password-manager-service »)", "{e} (Snap: permita el acceso al llavero con «snap connect librixmail:password-manager-service»)"),
     ("impossible d'ouvrir le fichier : {e}", "no se puede abrir el archivo: {e}"),
     ("impossible d'ouvrir le navigateur : {e}", "No se puede abrir el navegador: {e}"),
     ("l'agenda", "el calendario"),

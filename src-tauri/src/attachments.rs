@@ -237,14 +237,18 @@ pub fn mark_from_internet(path: &Path) {
     let _ = path;
 }
 
-/// Ouvre un fichier ou une adresse avec l'application par défaut, sans
-/// interpréteur de commandes (`ShellExecuteW` sous Windows, `xdg-open` ou
-/// `open` ailleurs).
+/// Ouvre un fichier avec l'application par défaut, sans interpréteur de
+/// commandes (`ShellExecuteW` sous Windows, `xdg-open` ou `open` ailleurs ;
+/// portail du bureau dans Flatpak et Snap, lot PK1).
 ///
 /// # Errors
 ///
 /// Aucune application ne prend le fichier en charge, ou lancement impossible.
 pub fn open_with_system(target: &std::ffi::OsStr) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if crate::packaging::Packaging::current().is_sandboxed() {
+        return crate::packaging::open_file_with_portal(Path::new(target));
+    }
     opener::open(target).map_err(|e| tr!("impossible d'ouvrir le fichier : {e}", e = e))
 }
 

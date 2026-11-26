@@ -565,7 +565,7 @@ export async function forgetAddress(email: string): Promise<void> {
 
 /** Conversations (lot U2), approchées par l'objet sans « Re: » ni « TR: » : le vrai calcul est dans le backend. */
 export function folderConversations(folderId: string): Promise<FolderConversations> {
-  const base = (s: string) => s.replace(/^(\s*(re|fwd?|tr)\s*:\s*)+/i, "").trim().toLowerCase();
+  const base = (s: string) => s.replace(/^(?:\s*(?:re|fwd?|tr)\s*:)+/i, "").trim().toLowerCase();
   const accountId = folderId.split(":")[0];
   const sentId = folders.find((f) => f.accountId === accountId && f.role === "sent")?.id;
   const keys = new Map<string, number>();

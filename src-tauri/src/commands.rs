@@ -1133,10 +1133,22 @@ pub(crate) async fn open_url(url: String) -> CmdResult<()> {
     crate::oauth::open_browser(&url)
 }
 
-/// Nouvelle version publiée sur GitHub (lot K1) ; `None` : déjà à jour.
+/// Nouvelle version publiée sur GitHub (lot K1) ; `None` : déjà à jour, ou
+/// mises à jour faites par le magasin de logiciels (Flatpak, Snap : lot PK1),
+/// sans requête vers GitHub.
 #[tauri::command]
 pub(crate) async fn check_update() -> CmdResult<Option<crate::update::NewVersion>> {
+    if crate::packaging::Packaging::current().is_sandboxed() {
+        return Ok(None);
+    }
     blocking(|| crate::update::check(env!("CARGO_PKG_VERSION"))).await
+}
+
+/// Provenance des mises à jour (lot PK1) : `github` (signalées par Librix
+/// Mail), `flatpak` ou `snap` (installées par le magasin de logiciels).
+#[tauri::command]
+pub(crate) fn update_channel() -> &'static str {
+    crate::packaging::Packaging::current().update_channel()
 }
 
 /// Pièce jointe ouverte avec l'application par défaut, si son type fait partie

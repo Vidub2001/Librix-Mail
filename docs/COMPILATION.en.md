@@ -57,7 +57,7 @@ sudo apt update
 sudo apt install -y build-essential curl wget file pkg-config git \
   libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
   libayatana-appindicator3-dev librsvg2-dev \
-  libdbus-1-dev libnotify-bin
+  libdbus-1-dev
 ```
 
 | Package | Why |
@@ -66,7 +66,6 @@ sudo apt install -y build-essential curl wget file pkg-config git \
 | `libwebkit2gtk-4.1-dev` | Web engine of the interface |
 | `libssl-dev` | TLS (IMAP, SMTP, HTTPS connections) and cache encryption (SQLCipher, batch G4) |
 | `libdbus-1-dev` | System keyring (Secret Service: GNOME Keyring, KWallet) |
-| `libnotify-bin` | New-mail notifications (`notify-send`) |
 | `libxdo-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev` | Tauri dependencies (`libayatana-appindicator3`: notification-area icon, batch B3) |
 
 **Rust** (through rustup; the project's version, pinned by `rust-toolchain.toml`, installs itself on the first `cargo` run):
@@ -149,6 +148,19 @@ development version (same identifier); nothing needs to be imported again.
 
 Other possible formats: `--bundles appimage` (single executable file), `--bundles rpm`.
 Without the `--bundles` option, the formats listed in `tauri.conf.json` are built (`deb` and `appimage`).
+
+### 2.5 Flatpak and Snap
+
+These two packages are built with their own tools, from the repository root:
+
+```bash
+make flatpak                  # target/Librix.Mail_x86_64.flatpak, installed for the user
+sg lxd -c "make snap"         # target/librixmail_<version>_amd64.snap (snapcraft in LXD)
+```
+
+Tools to install, permissions, testing and publishing: [packaging/flatpak/README.md](../packaging/flatpak/README.md)
+and [packaging/snap/README.md](../packaging/snap/README.md) (in French). On every `v*` tag, GitHub
+Actions also builds the `.flatpak` (attached to the release) and the snap (Snap Store edge channel).
 
 ---
 
@@ -357,6 +369,10 @@ To free the space taken by the build (2 to 4 GB): `cargo clean` at the root of t
 | Mail, calendar and contacts cache (`cache.sqlite`) | `~/.local/share/fr.librixmail.app/` | `%APPDATA%\fr.librixmail.app\` |
 | Passwords and OAuth tokens | Keyring (GNOME Keyring, "Passwords and Keys"), service `librixmail` | Windows credential store, entries `…librixmail` |
 
+Flatpak and Snap keep their data apart: `~/.var/app/fr.librixmail.Client/` (Flatpak) and
+`~/snap/librixmail/current/` (Snap), each with a `fr.librixmail.app` subfolder. The keyring is the
+session's own.
+
 Tokens too long for the Windows credential store are split over several entries
 (`key#1`, `key#2`…) and put back together automatically.
 
@@ -407,7 +423,6 @@ The displayed version and that of the installers come from `"version"` in
 | `Failed when opening source(s)` / `0x8a15000f` (winget) | winget catalogue missing or network without DNS | Check DNS (`Resolve-DnsName github.com`), then `winget source reset --force` and `winget source update` |
 | `failed to build bundler settings: invalid category` | Unknown category in `tauri.conf.json` | Use a recognised value (`Productivity`) |
 | Passwords lost at every close | Keyring unavailable | Linux: check that GNOME Keyring is running; Windows: check that the built version includes `windows-native` (`src-tauri/Cargo.toml`) |
-| No notification (Linux) | `notify-send` missing | `sudo apt install libnotify-bin` |
 | `error: linker 'link.exe' not found` (Windows) | Build Tools missing or incomplete | Reinstall the Build Tools with the `VC.Tools.x86.x64` component |
 
 ---

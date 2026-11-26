@@ -165,6 +165,7 @@ const es: Record<string, string> = {
   "Conditions": "Condiciones",
   "Confirmation": "Confirmación",
   "Confirmer le mot de passe": "Confirmar la contraseña",
+  "Les mises à jour sont installées par le gestionnaire de logiciels du système, sans que Librix Mail interroge GitHub.": "Las actualizaciones las instala el gestor de software del sistema, sin que Librix Mail consulte GitHub.",
   "À jour à {time}": "Actualizado a las {time}",
   "Les messages sont relevés en arrière-plan": "Los mensajes se comprueban en segundo plano",
   "Expéditeur non vérifié : le serveur de réception n'a pas pu confirmer que ce message vient de {domain}. Méfiez-vous des liens, des pièces jointes et des demandes de paiement.": "Remitente no verificado: el servidor de recepción no ha podido confirmar que este mensaje procede de {domain}. Desconfíe de los enlaces, los archivos adjuntos y las solicitudes de pago.",

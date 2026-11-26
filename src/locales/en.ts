@@ -165,6 +165,7 @@ const en: Record<string, string> = {
   "Conditions": "Conditions",
   "Confirmation": "Confirm",
   "Confirmer le mot de passe": "Confirm password",
+  "Les mises à jour sont installées par le gestionnaire de logiciels du système, sans que Librix Mail interroge GitHub.": "Updates are installed by your system's software manager; Librix Mail does not contact GitHub.",
   "À jour à {time}": "Up to date at {time}",
   "Les messages sont relevés en arrière-plan": "Messages are checked in the background",
   "Expéditeur non vérifié : le serveur de réception n'a pas pu confirmer que ce message vient de {domain}. Méfiez-vous des liens, des pièces jointes et des demandes de paiement.": "Unverified sender: the receiving server could not confirm that this message comes from {domain}. Be wary of links, attachments and payment requests.",

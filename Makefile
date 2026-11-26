@@ -10,6 +10,8 @@
 #   make sonar            analyse SonarQube (SONAR_HOST_URL et SONAR_TOKEN requis)
 #   make fuzz DUREE=60    fuzzing, DUREE secondes par cible (nightly + cargo-fuzz)
 #   make ui-test          tests de l'interface dans Chromium (Playwright, lot E4)
+#   make flatpak          construit et installe le Flatpak (packaging/flatpak/README.md)
+#   make snap             construit le snap (packaging/snap/README.md)
 #   make ci               make audit pour l'intégration continue (Jenkinsfile, lot G5) :
 #                         tests de l'interface obligatoires
 #   make audit-tools      vérifie que les outils sont installés
@@ -24,11 +26,11 @@ CLIPPY_JSON := $(OUT)/clippy.json
 # le « nouveau code » y est compté depuis la version précédente.
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)
 
-.PHONY: audit ci ispdb ispdb-age front-test front-coverage ui-test ui-test-if-ready audit-baseline audit-tools deny npm-audit semgrep semgrep-test \
+.PHONY: audit ci ispdb ispdb-age front-test front-coverage ui-test ui-test-if-ready audit-baseline audit-tools flatpak flatpak-sources flatpak-lint snap deny npm-audit semgrep semgrep-test \
         fmt clippy clippy-strict panic-unwind fuzz-lock test corpus corpus-test sonar fuzz hooks help
 
 help:
-	@sed -n '2,18p' Makefile
+	@sed -n '2,20p' Makefile
 
 audit: audit-tools deny npm-audit ispdb-age semgrep fmt clippy panic-unwind fuzz-lock test corpus front-test ui-test-if-ready
 	@echo
@@ -161,6 +163,47 @@ UI_READY = node --input-type=module -e "import { chromium } from '@playwright/te
 ui-test-if-ready:
 	@if $(UI_READY); then npx playwright test; \
 	else echo "⚠ Tests de l'interface non lancés : npx playwright install chromium (voir make ui-test)"; fi
+
+# --- Flatpak (lot PK2, mode d'emploi : packaging/flatpak/README.md) ----------
+
+FLATPAK_TOOLS ?= $(HOME)/outils/flatpak-builder-tools
+FLATPAK_DIR = packaging/flatpak
+FLATPAK_ID = fr.librixmail.Client
+# Python du système : celui pour lequel apt installe python3-aiohttp et python3-tomlkit.
+FLATPAK_PYTHON ?= /usr/bin/python3
+
+# Sources des crates et des paquets npm, pour une construction sans réseau :
+# à refaire après chaque changement de Cargo.lock ou de package-lock.json.
+flatpak-sources:
+	@mkdir -p $(FLATPAK_DIR)/generated
+	$(FLATPAK_PYTHON) $(FLATPAK_TOOLS)/cargo/flatpak-cargo-generator.py Cargo.lock -o $(FLATPAK_DIR)/generated/cargo-sources.json
+	node $(FLATPAK_DIR)/npm-lock-complet.mjs
+	flatpak-node-generator --no-requests-cache npm package-lock.json -o $(FLATPAK_DIR)/generated/node-sources.json
+	$(FLATPAK_PYTHON) $(FLATPAK_DIR)/sans-navigateurs.py $(FLATPAK_DIR)/generated/node-sources.json
+
+# Construit le Flatpak, l'installe pour l'utilisateur et en fait un fichier
+# target/Librix.Mail_x86_64.flatpak (celui des versions publiées).
+flatpak: flatpak-sources
+	flatpak-builder --user --install --force-clean --install-deps-from=flathub \
+		--state-dir=target/flatpak-builder --repo=target/flatpak-repo \
+		target/flatpak-build $(FLATPAK_DIR)/$(FLATPAK_ID).yml
+	flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+		target/flatpak-repo target/Librix.Mail_x86_64.flatpak $(FLATPAK_ID)
+	@echo "✔ target/Librix.Mail_x86_64.flatpak ; lancer : flatpak run $(FLATPAK_ID)"
+
+# Contrôles de Flathub (flatpak install --user flathub org.flatpak.Builder).
+flatpak-lint:
+	flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest $(FLATPAK_DIR)/$(FLATPAK_ID).yml
+	flatpak run --command=flatpak-builder-lint org.flatpak.Builder appstream $(FLATPAK_DIR)/$(FLATPAK_ID).metainfo.xml
+	flatpak run --command=desktop-file-validate org.flatpak.Builder $(FLATPAK_DIR)/$(FLATPAK_ID).desktop
+
+# --- Snap (lot PK3, mode d'emploi : packaging/snap/README.md) -----------------
+
+# Construit dans un conteneur LXD (snapcraft) : target/librixmail_<version>_amd64.snap.
+snap:
+	@mkdir -p target
+	snapcraft pack --use-lxd --output target/
+	@ls -l target/librixmail_*_amd64.snap
 
 # --- Fuzzing (lot 8, mode d'emploi : fuzz/README.md) ---------------------------
 

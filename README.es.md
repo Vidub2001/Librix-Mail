@@ -49,12 +49,20 @@ Las versiones se compilan a partir de este repositorio con GitHub Actions. Cada 
 |---|---|
 | Ubuntu, Debian | paquete `.deb` |
 | Cualquier distribución Linux | `AppImage` |
+| Cualquier distribución Linux, en entorno aislado | `.flatpak` (pronto en Flathub) |
+| Ubuntu y distribuciones con snapd | Snap Store: `sudo snap install librixmail` |
 | Windows 10 y 11 | instalador `.exe` |
 | Windows, sin instalación | versión portátil `.zip` |
 
 Los archivos de Windows aún no están firmados: Windows puede mostrar un aviso en la primera instalación.
 
-> **Estado:** versión 0.4.0, usada a diario por su autor. Se agradecen los comentarios y los avisos de errores.
+Flatpak: `flatpak install --user ./Librix.Mail_x86_64.flatpak`. Snap: después conecta el llavero y la instancia única,
+`sudo snap connect librixmail:password-manager-service` y
+`sudo snap connect librixmail:single-instance-plug librixmail:single-instance`.
+Los datos del Flatpak y del Snap están separados de los del `.deb`: para cambiar, exporta una copia de seguridad
+(Configuración › Copia de seguridad) e impórtala en la nueva instalación.
+
+> **Estado:** versión 0.4.2, usada a diario por su autor. Se agradecen los comentarios y los avisos de errores.
 
 ## Funciones
 
@@ -206,6 +214,8 @@ en la configuración de la cuenta; se guardan en el llavero y no se vuelven a mo
 | Caché de correo, calendario y contactos (`cache.sqlite`) | `~/.local/share/fr.librixmail.app/` | `%APPDATA%\fr.librixmail.app\` |
 | Contraseñas y tokens | llavero, servicio `librixmail` | almacén de credenciales de Windows |
 | Modo portátil | — | carpeta `data\` junto al ejecutable |
+| Flatpak | `~/.var/app/fr.librixmail.Client/` (`config/` y `data/`, subcarpeta `fr.librixmail.app`) | — |
+| Snap | `~/snap/librixmail/current/` (`.config/` y `.local/share/`, subcarpeta `fr.librixmail.app`) | — |
 
 La caché puede borrarse sin riesgo: se reconstruye desde los servidores. Las instalaciones hechas
 por versiones anteriores se recuperan automáticamente en el primer inicio.

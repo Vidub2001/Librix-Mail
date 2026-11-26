@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, AccountConfig, AttachmentInput, CalEvent, Contact, CorrespondentInfo, Detected, Draft, DraftContent, FlushReport, FolderListing, FolderRole, ImportReport, Invitation, InvitationAnswer, Message, MessageSummary, MoveReport, NewVersion, RestoreReport, PimCollection, PimSyncReport, PrefetchReport, RecipientCheck, SavedDraft, SearchReport, Security, SigningAccount, SmimeIdentity, Suggestion, TestReport, ReturnedMessage, ScheduledItem, FolderConversations } from "./types";
+import type { Account, AccountConfig, AttachmentInput, CalEvent, Contact, CorrespondentInfo, Detected, Draft, DraftContent, FlushReport, FolderConversations, FolderListing, FolderRole, ImportReport, Invitation, InvitationAnswer, Message, MessageSummary, MoveReport, NewVersion, PimCollection, PimSyncReport, PrefetchReport, RecipientCheck, RestoreReport, ReturnedMessage, SavedDraft, ScheduledItem, SearchReport, Security, SigningAccount, SmimeIdentity, Suggestion, TestReport, UpdateChannel } from "./types";
 import type { ListSync } from "./lists";
 import type * as Mock from "./mock";
 
@@ -413,6 +413,8 @@ export const api = {
   prefsSet: (key: string, value: string | null): Promise<void> => (inTauri ? invoke("prefs_set", { key, value }) : Promise.resolve()),
   /** Nouvelle version publiée sur GitHub (lot K1) ; null : à jour. */
   checkUpdate: (): Promise<NewVersion | null> => (inTauri ? invoke("check_update") : mock.checkUpdate()),
+  /** Provenance des mises à jour (lot PK1) : signalées par Librix Mail, ou installées par Flatpak ou Snap. */
+  updateChannel: (): Promise<UpdateChannel> => (inTauri ? invoke("update_channel") : Promise.resolve("github")),
   openUrl: (url: string): Promise<void> =>
     inTauri ? invoke("open_url", { url }) : Promise.resolve(void window.open(url, "_blank", "noopener")),
 

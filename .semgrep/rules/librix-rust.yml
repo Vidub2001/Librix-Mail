@@ -50,10 +50,10 @@ rules:
     languages: [rust]
     severity: ERROR
     message: >-
-      notify-send reçoit l'expéditeur et l'objet d'un mail : sans `--` ni
-      échappement, un nom comme `--help` ou du balisage <a> passe en option ou
-      en lien (relecture S5). Construire les arguments avec
-      `idle::notify_send_args`, qui ajoute `--` et échappe le texte.
+      Les notifications passent par D-Bus (`idle::freedesktop`, lot PK1) :
+      notify-send recevrait l'expéditeur et l'objet d'un mail, et sans `--` ni
+      échappement, un nom comme `--help` ou du balisage <a> passerait en option
+      ou en lien (relecture S5). Ne pas revenir à notify-send.
     metadata:
       relecture: S5
       lot: 5

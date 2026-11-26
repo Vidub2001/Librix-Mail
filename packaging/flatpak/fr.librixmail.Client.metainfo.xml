@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fiche AppStream de Librix Mail (lot PK2) : Flathub, GNOME Logiciels, Discover. -->
+<component type="desktop-application">
+  <id>fr.librixmail.Client</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Librix Mail</name>
+  <summary>All your mail accounts in one inbox</summary>
+  <summary xml:lang="fr">Tous vos comptes mail dans une seule boîte</summary>
+  <summary xml:lang="es">Todas tus cuentas de correo en una sola bandeja</summary>
+
+  <developer id="fr.librixmail">
+    <name>Fabrice Joffre</name>
+  </developer>
+
+  <description>
+    <p>Librix Mail brings your mail accounts, calendars and contacts together in one desktop app, with no Librix Mail server, no ads and no telemetry.</p>
+    <p xml:lang="fr">Librix Mail réunit vos comptes mail, vos agendas et vos contacts dans une application de bureau, sans serveur Librix Mail, ni publicité, ni télémétrie.</p>
+    <p xml:lang="es">Librix Mail reúne tus cuentas de correo, calendarios y contactos en una aplicación de escritorio, sin servidor de Librix Mail, sin publicidad y sin telemetría.</p>
+    <ul>
+      <li>One inbox for Gmail, Outlook.com, personal Microsoft 365 accounts and any IMAP server, unified or side by side</li>
+      <li xml:lang="fr">Une boîte pour Gmail, Outlook.com, les comptes Microsoft 365 personnels et tout serveur IMAP, unifiés ou côte à côte</li>
+      <li xml:lang="es">Una bandeja para Gmail, Outlook.com, cuentas personales de Microsoft 365 y cualquier servidor IMAP, unificadas o lado a lado</li>
+      <li>Move messages from one account to another, by hand or with rules, without losing or duplicating anything if the network drops</li>
+      <li xml:lang="fr">Déplacement des messages d'un compte à l'autre, à la main ou par des règles, sans perte ni doublon si le réseau coupe</li>
+      <li xml:lang="es">Mueve mensajes de una cuenta a otra, a mano o con reglas, sin perder ni duplicar nada si la red se corta</li>
+      <li>Calendar and contacts: Google, Outlook.com, CalDAV and CardDAV, and invitations answered from the message</li>
+      <li xml:lang="fr">Agenda et contacts : Google, Outlook.com, CalDAV et CardDAV, et réponse aux invitations depuis le message</li>
+      <li xml:lang="es">Calendario y contactos: Google, Outlook.com, CalDAV y CardDAV, y respuesta a las invitaciones desde el mensaje</li>
+      <li>Messages shown without scripts, remote images only with your consent, and an encrypted local cache</li>
+      <li xml:lang="fr">Messages affichés sans script, images distantes seulement avec votre accord, et cache local chiffré</li>
+      <li xml:lang="es">Mensajes mostrados sin scripts, imágenes remotas solo con tu permiso y caché local cifrada</li>
+      <li>S/MIME signing and encryption, offline work, conversations, rules, reminders and precise search</li>
+      <li xml:lang="fr">Signature et chiffrement S/MIME, travail hors connexion, conversations, règles, rappels et recherche précise</li>
+      <li xml:lang="es">Firma y cifrado S/MIME, trabajo sin conexión, conversaciones, reglas, recordatorios y búsqueda precisa</li>
+    </ul>
+    <p>The interface is available in English, French and Spanish.</p>
+    <p xml:lang="fr">L'interface est en français, en anglais et en espagnol.</p>
+    <p xml:lang="es">La interfaz está en español, inglés y francés.</p>
+  </description>
+
+  <launchable type="desktop-id">fr.librixmail.Client.desktop</launchable>
+  <provides>
+    <binary>librixmail</binary>
+  </provides>
+
+  <url type="homepage">https://librixmail.fr</url>
+  <url type="help">https://librixmail.fr/faq.html</url>
+  <url type="bugtracker">https://github.com/Vidub2001/Librix-Mail/issues</url>
+  <url type="vcs-browser">https://github.com/Vidub2001/Librix-Mail</url>
+  <url type="contact">https://librixmail.fr/contact.html</url>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#e7eef8</color>
+    <color type="primary" scheme_preference="dark">#0b2545</color>
+  </branding>
+
+  <content_rating type="oars-1.1"/>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <categories>
+    <category>Office</category>
+    <category>Email</category>
+  </categories>
+  <keywords>
+    <keyword>mail</keyword>
+    <keyword>email</keyword>
+    <keyword>IMAP</keyword>
+    <keyword>calendar</keyword>
+    <keyword>contacts</keyword>
+    <keyword xml:lang="fr">courriel</keyword>
+    <keyword xml:lang="fr">messagerie</keyword>
+    <keyword xml:lang="fr">agenda</keyword>
+    <keyword xml:lang="es">correo</keyword>
+    <keyword xml:lang="es">calendario</keyword>
+    <keyword xml:lang="es">contactos</keyword>
+  </keywords>
+
+  <!-- Captures servies par le site (librixmail.fr/img/appstream/), une par langue. -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>Unified inbox with an open message</caption>
+      <caption xml:lang="fr">Boîte de réception unifiée et message ouvert</caption>
+      <caption xml:lang="es">Bandeja de entrada unificada con un mensaje abierto</caption>
+      <image type="source" width="1440" height="900">https://librixmail.fr/img/appstream/en/hero.png</image>
+      <image type="source" width="1440" height="900" xml:lang="fr">https://librixmail.fr/img/appstream/fr/hero.png</image>
+      <image type="source" width="1440" height="900" xml:lang="es">https://librixmail.fr/img/appstream/es/hero.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Week calendar with events from several accounts</caption>
+      <caption xml:lang="fr">Agenda de la semaine avec les rendez-vous de plusieurs comptes</caption>
+      <caption xml:lang="es">Calendario semanal con citas de varias cuentas</caption>
+      <image type="source" width="1440" height="900">https://librixmail.fr/img/appstream/en/agenda.png</image>
+      <image type="source" width="1440" height="900" xml:lang="fr">https://librixmail.fr/img/appstream/fr/agenda.png</image>
+      <image type="source" width="1440" height="900" xml:lang="es">https://librixmail.fr/img/appstream/es/agenda.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Event details in the calendar</caption>
+      <caption xml:lang="fr">Fiche d'un rendez-vous dans l'agenda</caption>
+      <caption xml:lang="es">Detalle de una cita en el calendario</caption>
+      <image type="source" width="1440" height="900">https://librixmail.fr/img/appstream/en/fiche.png</image>
+      <image type="source" width="1440" height="900" xml:lang="fr">https://librixmail.fr/img/appstream/fr/fiche.png</image>
+      <image type="source" width="1440" height="900" xml:lang="es">https://librixmail.fr/img/appstream/es/fiche.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Compose window</caption>
+      <caption xml:lang="fr">Fenêtre de rédaction</caption>
+      <caption xml:lang="es">Ventana de redacción</caption>
+      <image type="source" width="980" height="720">https://librixmail.fr/img/appstream/en/redaction.png</image>
+      <image type="source" width="980" height="720" xml:lang="fr">https://librixmail.fr/img/appstream/fr/redaction.png</image>
+      <image type="source" width="980" height="720" xml:lang="es">https://librixmail.fr/img/appstream/es/redaction.png</image>
+    </screenshot>
+  </screenshots>
+
+  <!-- Une entrée par version, la plus récente en tête (à compléter à chaque étiquette). -->
+  <releases>
+    <release version="0.4.2" date="2026-11-26">
+      <description>
+        <p>Librix Mail is now available as a Flatpak and as a Snap. Desktop notifications go through D-Bus, without notify-send.</p>
+        <p xml:lang="fr">Librix Mail est maintenant disponible en Flatpak et en Snap. Les notifications du bureau passent par D-Bus, sans notify-send.</p>
+        <p xml:lang="es">Librix Mail ya está disponible en Flatpak y en Snap. Las notificaciones de escritorio pasan por D-Bus, sin notify-send.</p>
+      </description>
+    </release>
+    <release version="0.4.1" date="2026-11-25"/>
+    <release version="0.4.0" date="2026-11-25"/>
+    <release version="0.3.9" date="2026-11-23"/>
+  </releases>
+</component>

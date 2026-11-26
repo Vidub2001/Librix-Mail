@@ -133,50 +133,12 @@ fn watch(app: &AppHandle, config: &AccountConfig, stop: &AtomicBool) {
     }
 }
 
-/// Lanceur installé par les paquets (`Librix Mail.desktop`, d'après
-/// `productName`) : GNOME y rattache les notifications, les empile sous
-/// l'application et permet de toutes les effacer d'un coup (lot M1).
-const DESKTOP_ENTRY: &str = "Librix Mail";
-
-/// Arguments de `notify-send` (relecture S5). Le titre et le texte viennent
-/// d'un mail (nom d'expéditeur, objet) : `--` les empêche d'être lus comme
-/// des options (`--help`, `--app-name=…`), et le texte, que les serveurs de
-/// notification interprètent comme du balisage, est échappé (pas de lien
-/// `<a>` cliquable). Le titre est du texte brut selon la norme : l'échapper
-/// afficherait `&amp;`. `options` : options de plus, placées avant `--`
-/// (remplacement d'une notification, lot M1).
-pub(crate) fn notify_send_args(summary: &str, body: &str, icon: &str, category: &str, options: &[String]) -> Vec<String> {
-    let escaped = body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
-    let mut args = vec![
-        "--app-name=Librix Mail".into(),
-        format!("--hint=string:desktop-entry:{DESKTOP_ENTRY}"),
-        format!("--icon={icon}"),
-        format!("--category={category}"),
-    ];
-    args.extend_from_slice(options);
-    args.extend(["--".into(), summary.into(), escaped]);
-    args
-}
-
-/// Comment montrer une notification qui en remplace peut-être une autre (lot M1).
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Shown {
-    /// Nouvelle notification, suivie jusqu'à sa fermeture pour en connaître l'identifiant.
-    Tracked,
-    /// Remplace la notification encore ouverte qui porte cet identifiant.
-    Replacing(u32),
-}
-
-/// Options de [`notify_send_args`] selon [`Shown`].
-#[cfg(target_os = "linux")]
-pub(crate) fn replace_args(shown: Shown) -> Vec<String> {
-    match shown {
-        // `--wait` garde `notify-send` en vie jusqu'à la fermeture ; `--print-id`
-        // donne l'identifiant à réutiliser pour les remplacements.
-        Shown::Tracked => vec!["--print-id".into(), "--wait".into()],
-        Shown::Replacing(id) => vec![format!("--replace-id={id}")],
-    }
+/// Texte d'une notification (relecture S5). Il vient d'un mail (objet,
+/// nom du compte) et les serveurs de notification l'interprètent comme du
+/// balisage : il est échappé (pas de lien `<a>` cliquable). Le titre est du
+/// texte brut selon la norme : l'échapper afficherait `&amp;`.
+pub(crate) fn notification_body(body: &str) -> String {
+    body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 /// Notification « nouveaux messages » encore affichée pour un compte (lots
@@ -193,16 +155,6 @@ struct Open {
 /// Notifications « nouveaux messages » affichées, par compte.
 #[cfg(any(target_os = "linux", windows))]
 static OPEN: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Open>>> = std::sync::LazyLock::new(Default::default);
-
-/// Oublie la notification `id` du compte `key` si c'est encore celle-là.
-#[cfg(target_os = "linux")]
-fn forget_open(key: &str, id: u32) {
-    if let Ok(mut open) = OPEN.lock() {
-        if open.get(key).is_some_and(|o| o.id == id) {
-            open.remove(key);
-        }
-    }
-}
 
 /// Icône et catégorie freedesktop des notifications « nouveaux messages ».
 const MAIL_ICON: &str = "mail-unread";
@@ -232,32 +184,134 @@ pub(crate) fn arrival_text(total: u32, a: &Arrivals<'_>) -> (String, String) {
     }
 }
 
-/// Lance `notify-send` sans attendre sa fin.
+/// Notifications du bureau sous Linux par D-Bus (`org.freedesktop.Notifications`,
+/// lot PK1), en installation classique comme dans Flatpak et Snap, où
+/// `notify-send` n'existe pas.
 #[cfg(target_os = "linux")]
-fn spawn_notify_send(summary: &str, body: &str, icon: &str, category: &str, options: &[String]) {
-    let shown = std::process::Command::new("notify-send")
-        .args(notify_send_args(summary, body, icon, category, options))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    match shown {
-        Ok(mut child) => {
-            thread::spawn(move || {
-                let _ = child.wait();
-            });
+mod freedesktop {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, PoisonError};
+    use std::thread;
+
+    use zbus::blocking::{Connection, Proxy};
+    use zbus::zvariant::Value;
+
+    use super::{notification_body, OPEN};
+
+    const DESTINATION: &str = "org.freedesktop.Notifications";
+    const PATH: &str = "/org/freedesktop/Notifications";
+    const INTERFACE: &str = "org.freedesktop.Notifications";
+    const APP_NAME: &str = "Librix Mail";
+    /// Durée d'affichage : celle que choisit le serveur de notifications.
+    const SERVER_TIMEOUT: i32 = -1;
+
+    /// Proxy du serveur de notifications, sur une connexion au bus de
+    /// session ouverte au premier usage et gardée. Oublié après un échec :
+    /// la notification suivante rouvre la connexion (bus redémarré…).
+    static PROXY: Mutex<Option<Proxy<'static>>> = Mutex::new(None);
+    /// Fil d'écoute des fermetures en marche ; remis à `false` quand il
+    /// s'arrête ou n'a pas pu démarrer, pour être relancé.
+    static WATCHING: AtomicBool = AtomicBool::new(false);
+
+    /// Une notification à montrer.
+    #[derive(Debug, Clone, Copy)]
+    pub(super) struct Note<'a> {
+        pub summary: &'a str,
+        pub body: &'a str,
+        /// Nom d'icône freedesktop.
+        pub icon: &'a str,
+        /// Catégorie freedesktop (`email.arrived`…).
+        pub category: &'a str,
+    }
+
+    fn new_proxy(connection: &Connection) -> zbus::Result<Proxy<'static>> {
+        Proxy::new(connection, DESTINATION, PATH, INTERFACE)
+    }
+
+    /// Proxy gardé, ou nouveau sur une nouvelle connexion.
+    fn proxy() -> zbus::Result<Proxy<'static>> {
+        let mut slot = PROXY.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(proxy) = slot.as_ref() {
+            return Ok(proxy.clone());
         }
-        Err(e) => crate::diag::report(&format_args!("notification impossible (notify-send) : {e}")),
+        let proxy = new_proxy(&Connection::session()?)?;
+        *slot = Some(proxy.clone());
+        Ok(proxy)
+    }
+
+    /// Oublie le proxy gardé après une erreur du bus.
+    fn drop_proxy() {
+        *PROXY.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// Montre la notification, ou remplace celle qui porte l'identifiant
+    /// `replaces` (0 : nouvelle) ; rend l'identifiant donné par le serveur.
+    /// Le lanceur du paquet (`desktop-entry`) fait rattacher la notification
+    /// à l'application : GNOME les empile sous elle (lot M1).
+    pub(super) fn show(note: Note<'_>, replaces: u32) -> zbus::Result<u32> {
+        let proxy = proxy()?;
+        watch_closed(&proxy);
+        let entry = crate::packaging::Packaging::current().desktop_entry();
+        let hints: HashMap<&str, Value<'_>> =
+            HashMap::from([("desktop-entry", Value::from(entry.as_str())), ("category", Value::from(note.category))]);
+        let actions: Vec<&str> = Vec::new();
+        let body = notification_body(note.body);
+        let shown = proxy.call("Notify", &(APP_NAME, replaces, note.icon, note.summary, body.as_str(), actions, hints, SERVER_TIMEOUT));
+        if shown.is_err() {
+            drop_proxy();
+        }
+        shown
+    }
+
+    /// Suit la fermeture des notifications (effacée, ou ouverte d'un clic)
+    /// sur un fil à part : la notification fermée d'un compte est oubliée,
+    /// la suivante repart de zéro. Un seul fil à la fois ; relancé à la
+    /// notification suivante s'il s'arrête (connexion fermée) ou n'a pas pu
+    /// s'abonner.
+    fn watch_closed(proxy: &Proxy<'static>) {
+        if WATCHING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let signals = match proxy.receive_signal("NotificationClosed") {
+            Ok(signals) => signals,
+            Err(e) => {
+                WATCHING.store(false, Ordering::Release);
+                crate::diag::report(&format_args!("fermeture des notifications non suivie : {e}"));
+                return;
+            }
+        };
+        thread::spawn(move || {
+            for message in signals {
+                if let Ok((id, _reason)) = message.body().deserialize::<(u32, u32)>() {
+                    forget(id);
+                }
+            }
+            // Connexion fermée : nouvelle connexion et nouvel abonnement à
+            // la prochaine notification.
+            drop_proxy();
+            WATCHING.store(false, Ordering::Release);
+        });
+    }
+
+    /// Oublie la notification `id`, quel que soit son compte.
+    fn forget(id: u32) {
+        if let Ok(mut open) = OPEN.lock() {
+            open.retain(|_, o| o.id != id);
+        }
     }
 }
 
-/// Notification du bureau : libnotify sous Linux, module de notifications de
+/// Notification du bureau : D-Bus sous Linux, module de notifications de
 /// Tauri ailleurs (Windows, macOS). `icon` et `category` : noms freedesktop (Linux).
 pub(crate) fn desktop_notify(app: &AppHandle, summary: &str, body: &str, icon: &str, category: &str) {
     #[cfg(target_os = "linux")]
     {
         let _ = app;
-        spawn_notify_send(summary, body, icon, category, &[]);
+        let note = freedesktop::Note { summary, body, icon, category };
+        if let Err(e) = freedesktop::show(note, 0) {
+            crate::diag::report(&format_args!("notification impossible : {e}"));
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -272,9 +326,9 @@ pub(crate) fn desktop_notify(app: &AppHandle, summary: &str, body: &str, icon: &
 /// Annonce des nouveaux messages d'un compte : une seule notification par
 /// compte, remplacée tant qu'elle reste affichée et qui additionne les
 /// messages (« 3 nouveaux messages ») ; une fois fermée, la suivante repart
-/// de zéro (lots M1 et P). Linux : `notify-send` suivi jusqu'à la fermeture ;
-/// Windows : notification à étiquette, retrouvée dans le centre de
-/// notifications ; ailleurs, une notification par annonce.
+/// de zéro (lots M1 et P). Linux : identifiant du serveur de notifications,
+/// oublié à la fermeture ; Windows : notification à étiquette, retrouvée
+/// dans le centre de notifications ; ailleurs, une notification par annonce.
 pub(crate) fn notify_arrivals(app: &AppHandle, a: &Arrivals<'_>) {
     #[cfg(target_os = "linux")]
     {
@@ -282,16 +336,14 @@ pub(crate) fn notify_arrivals(app: &AppHandle, a: &Arrivals<'_>) {
         let open = OPEN.lock().ok().and_then(|o| o.get(a.account).copied());
         let total = open.map_or(0, |o| o.count).saturating_add(a.added);
         let (summary, body) = arrival_text(total, a);
-        match open {
-            Some(o) => {
-                spawn_notify_send(&summary, &body, MAIL_ICON, MAIL_CATEGORY, &replace_args(Shown::Replacing(o.id)));
+        let note = freedesktop::Note { summary: &summary, body: &body, icon: MAIL_ICON, category: MAIL_CATEGORY };
+        match freedesktop::show(note, open.map_or(0, |o| o.id)) {
+            Ok(id) => {
                 if let Ok(mut map) = OPEN.lock() {
-                    if let Some(entry) = map.get_mut(a.account).filter(|e| e.id == o.id) {
-                        entry.count = total;
-                    }
+                    map.insert(a.account.to_owned(), Open { count: total, id });
                 }
             }
-            None => track_new(a.account, total, &summary, &body),
+            Err(e) => crate::diag::report(&format_args!("notification impossible : {e}")),
         }
     }
     #[cfg(windows)]
@@ -320,48 +372,6 @@ pub(crate) fn notify_arrivals(app: &AppHandle, a: &Arrivals<'_>) {
         let (summary, body) = arrival_text(a.added, a);
         desktop_notify(app, &summary, &body, MAIL_ICON, MAIL_CATEGORY);
     }
-}
-
-/// Montre une notification et la suit jusqu'à sa fermeture : `notify-send
-/// --print-id --wait` écrit l'identifiant, puis se termine quand la
-/// notification est fermée (effacée, ou ouverte d'un clic). Un seul
-/// processus en attente par compte : les remplacements n'attendent pas.
-#[cfg(target_os = "linux")]
-fn track_new(account: &str, total: u32, summary: &str, body: &str) {
-    use std::io::BufRead;
-
-    let spawned = std::process::Command::new("notify-send")
-        .args(notify_send_args(summary, body, MAIL_ICON, MAIL_CATEGORY, &replace_args(Shown::Tracked)))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    let mut child = match spawned {
-        Ok(child) => child,
-        Err(e) => {
-            crate::diag::report(&format_args!("notification impossible (notify-send) : {e}"));
-            return;
-        }
-    };
-    let stdout = child.stdout.take();
-    let key = account.to_owned();
-    thread::spawn(move || {
-        let mut line = String::new();
-        let read = stdout.map(|out| std::io::BufReader::new(out).read_line(&mut line));
-        let id = match read {
-            Some(Ok(n)) if n > 0 => line.trim().parse::<u32>().ok(),
-            _ => None,
-        };
-        let Some(id) = id else {
-            let _ = child.wait();
-            return;
-        };
-        if let Ok(mut open) = OPEN.lock() {
-            open.insert(key.clone(), Open { count: total, id });
-        }
-        let _ = child.wait();
-        forget_open(&key, id);
-    });
 }
 
 /// Notifications Windows à étiquette (lot P) : une notification de même
@@ -436,29 +446,6 @@ mod windows_toast {
 
 #[cfg(test)]
 mod tests {
-    use super::notify_send_args;
-    #[cfg(target_os = "linux")]
-    use super::{replace_args, Shown};
-
-    #[test]
-    fn m1_notification_rattachee_au_lanceur() {
-        let args = notify_send_args("Alice", "Bonjour", "mail-unread", "email.arrived", &[]);
-        let sep = args.iter().position(|a| a == "--").expect("séparateur --");
-        assert!(args[..sep].contains(&"--hint=string:desktop-entry:Librix Mail".to_owned()), "indication desktop-entry absente : {args:?}");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn m1_remplacement_ou_suivi() {
-        assert_eq!(replace_args(Shown::Tracked), ["--print-id", "--wait"]);
-        assert_eq!(replace_args(Shown::Replacing(42)), ["--replace-id=42"]);
-        // Options avant `--` : le titre et le texte restent après lui.
-        let args = notify_send_args("--wait", "x", "mail-unread", "email.arrived", &replace_args(Shown::Replacing(42)));
-        let sep = args.iter().position(|a| a == "--").expect("séparateur --");
-        assert!(args[..sep].contains(&"--replace-id=42".to_owned()), "{args:?}");
-        assert_eq!(&args[sep + 1..], ["--wait", "x"]);
-    }
-
     #[test]
     fn p_texte_d_un_message_puis_du_nombre() {
         let a = super::Arrivals { account: "a", added: 1, summary: "Alice", body: "Réunion\nPerso", account_name: "Perso" };
@@ -469,11 +456,8 @@ mod tests {
     }
 
     #[test]
-    fn arguments_de_notify_send() {
-        let args = notify_send_args("--help", "<a href=\"https://x\">Vérifiez</a> & co", "mail-unread", "email.arrived", &[]);
-        let sep = args.iter().position(|a| a == "--").expect("séparateur --");
-        // Titre et texte après `--` : jamais lus comme des options.
-        assert_eq!(&args[sep + 1..], ["--help", "&lt;a href=\"https://x\"&gt;Vérifiez&lt;/a&gt; &amp; co"]);
-        assert!(args[..sep].iter().all(|a| a.starts_with("--")));
+    fn texte_de_notification_echappe() {
+        let body = super::notification_body("<a href=\"https://x\">Vérifiez</a> & co");
+        assert_eq!(body, "&lt;a href=\"https://x\"&gt;Vérifiez&lt;/a&gt; &amp; co");
     }
 }

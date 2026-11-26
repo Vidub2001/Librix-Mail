@@ -49,12 +49,20 @@ Releases are built from this repository by GitHub Actions. Each one comes with `
 |---|---|
 | Ubuntu, Debian | `.deb` package |
 | Any Linux distribution | `AppImage` |
+| Any Linux distribution, sandboxed | `.flatpak` (on Flathub soon) |
+| Ubuntu and distributions with snapd | Snap Store: `sudo snap install librixmail` |
 | Windows 10 and 11 | `.exe` installer |
 | Windows, no installation | portable `.zip` |
 
 Windows files are not signed yet, so Windows may show a warning on first install.
 
-> **Status:** version 0.4.0, used every day by its author. Feedback and bug reports are welcome.
+Flatpak: `flatpak install --user ./Librix.Mail_x86_64.flatpak`. Snap: then connect the keyring and the single instance,
+`sudo snap connect librixmail:password-manager-service` and
+`sudo snap connect librixmail:single-instance-plug librixmail:single-instance`.
+Flatpak and Snap data are kept apart from the `.deb` installation: to switch, export a backup
+(Settings › Backup) and import it into the new installation.
+
+> **Status:** version 0.4.2, used every day by its author. Feedback and bug reports are welcome.
 
 ## Features
 
@@ -197,6 +205,8 @@ for Google) in the account settings; they are stored in the keyring and never di
 | Mail, calendar and contacts cache (`cache.sqlite`) | `~/.local/share/fr.librixmail.app/` | `%APPDATA%\fr.librixmail.app\` |
 | Passwords and tokens | keyring, service `librixmail` | Windows credential store |
 | Portable mode | — | `data\` folder next to the executable |
+| Flatpak | `~/.var/app/fr.librixmail.Client/` (`config/` and `data/`, subfolder `fr.librixmail.app`) | — |
+| Snap | `~/snap/librixmail/current/` (`.config/` and `.local/share/`, subfolder `fr.librixmail.app`) | — |
 
 The cache can be deleted safely: it is rebuilt from the servers. Installations made by earlier
 versions are taken over automatically on first start.

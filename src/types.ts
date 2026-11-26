@@ -251,6 +251,9 @@ export interface ServerConfig {
   pinnedCert?: string;
 }
 
+/** Provenance des mises à jour (lot PK1) : `github` (signalées par Librix Mail), `flatpak` ou `snap` (installées par le magasin de logiciels). */
+export type UpdateChannel = "github" | "flatpak" | "snap";
+
 /** Nouvelle version publiée sur GitHub (lot K1). */
 export interface NewVersion {
   version: string;

@@ -4,7 +4,8 @@
 # - versions identiques partout (étiquette, tauri.conf.json, Cargo.toml, package.json) ;
 # - dépendances (cargo deny) et tests Rust repassés sur le code étiqueté (lot J8c,
 #   audit) : aucun installateur n'est construit s'ils échouent ;
-# - installateurs Linux (deb, AppImage) et Windows (NSIS, version portable) ;
+# - installateurs Linux (deb, AppImage, Flatpak) et Windows (NSIS, version portable) ;
+# - snap envoyé au canal edge du Snap Store (passage en stable à la main) ;
 # - Windows signé par SignPath (certificat de la SignPath Foundation) si le
 #   projet SignPath est configuré ; chaque signature est approuvée à la main ;
 # - empreintes SHA256SUMS, signées par GPG si la clé est fournie ;
@@ -113,6 +114,77 @@ jobs:
             target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
+  # Lot PK2 : fichier .flatpak (packaging/flatpak/README.md), construit comme
+  # `make flatpak` sur le PC : sources cargo et npm déclarées à l'avance,
+  # compilation sans réseau dans le socle GNOME.
+  flatpak:
+    name: Flatpak
+    needs: [version, tests]
+    runs-on: ubuntu-24.04
+    env:
+      # Commit de flatpak-builder-tools (générateurs des sources), changé à la main.
+      FLATPAK_BUILDER_TOOLS: 9d86d336a39b9af38b86f114b6ce5820fe260f91
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: Outils Flatpak
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream python3-aiohttp python3-tomlkit pipx
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          git clone --quiet https://github.com/flatpak/flatpak-builder-tools "$HOME/outils/flatpak-builder-tools"
+          git -C "$HOME/outils/flatpak-builder-tools" checkout --quiet "$FLATPAK_BUILDER_TOOLS"
+          pipx install "$HOME/outils/flatpak-builder-tools/node"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Construction
+        run: make flatpak
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: flatpak
+          path: target/Librix.Mail_x86_64.flatpak
+          if-no-files-found: error
+
+  # Lot PK3 : snap (packaging/snap/README.md), construit dans LXD comme
+  # `make snap`, envoyé au canal edge du Snap Store sur étiquette si le secret
+  # SNAPCRAFT_STORE_CREDENTIALS est fourni (snapcraft export-login).
+  snap:
+    name: Snap
+    needs: [version, tests]
+    runs-on: ubuntu-24.04
+    env:
+      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: LXD et snapcraft
+        run: |
+          sudo snap install lxd
+          sudo lxd waitready
+          sudo lxd init --auto
+          # Docker met la politique FORWARD à DROP : sans ces règles, les
+          # conteneurs LXD ne sortent pas en IPv4 (même réglage que sur le PC).
+          sudo iptables -I DOCKER-USER -i lxdbr0 -j ACCEPT
+          sudo iptables -I DOCKER-USER -o lxdbr0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+          sudo snap install snapcraft --classic
+      - name: Construction
+        run: |
+          mkdir -p target
+          sudo snapcraft pack --use-lxd --output target/
+          ls -l target/librixmail_*_amd64.snap
+      - name: Envoi au canal edge du Snap Store
+        if: ${{ github.ref_type == 'tag' && env.SNAPCRAFT_STORE_CREDENTIALS != '' }}
+        run: snapcraft upload --release=edge target/librixmail_*_amd64.snap
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: snap
+          path: target/librixmail_*_amd64.snap
+          if-no-files-found: error
+
   windows:
     name: Windows
     needs: [version, tests]
@@ -170,7 +242,7 @@ jobs:
 
   publication:
     name: Publication (brouillon)
-    needs: [version, linux, windows]
+    needs: [version, linux, windows, flatpak]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -182,6 +254,10 @@ jobs:
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           name: windows
+          path: livraison
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: flatpak
           path: livraison
       # L'artefact linux garde ses sous-dossiers (deb/, appimage/) : tout remettre à plat.
       - name: Fichiers à plat
